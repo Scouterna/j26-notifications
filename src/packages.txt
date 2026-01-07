@@ -1,0 +1,12 @@
+uvicorn[standard]
+fastapi[standard]
+httpx[http2]
+joserfc
+itsdangerous
+pydantic
+pydantic_settings
+async-lru
+asyncpg
+firebase_admin
+prometheus-fastapi-instrumentator
+#authlib     # Just for dev

@@ -1,0 +1,19 @@
+# Git
+.git
+.gitignore
+
+# VSCode
+.vscode
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Python
+src/.venv
+src/__pycache__
+src/.env
+src/*.pyc
+
+# Other
+k8s
