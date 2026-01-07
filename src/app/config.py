@@ -11,9 +11,9 @@ class Settings(BaseSettings):
     FCM_CREDENTIALS_JSON: str
     API_PREFIX: str = "/api"
     SESSION_SECRET_KEY: str = "change-me"
-    OAUTH_CLIENT_ID: str
-    OAUTH_CLIENT_SECRET: str
-    OAUTH_METATADATA_URL: str
+    OAUTH_CLIENT_ID: str = ""
+    OAUTH_CLIENT_SECRET: str = ""
+    OAUTH_METATADATA_URL: str = ""
 
     model_config = SettingsConfigDict(env_file=".env")
 
