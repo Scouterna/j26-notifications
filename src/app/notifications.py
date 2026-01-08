@@ -118,9 +118,7 @@ async def list_notifications(
             tenant,
             user.preferred_username,
         )
-        if not rows:  # No subscriptions found
-            return []
-        channel_ids = [d["data"]["channel_id"] for d in rows]
+        channel_ids = [d["data"]["channel_id"] for d in rows] if rows else []
     channel_ids.append(user.preferred_username)  # Add direct notifications in history list
 
     query = """
