@@ -1,10 +1,13 @@
 # from pathlib import Path
+import copy
 import logging
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -67,7 +70,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
     root_path=settings.ROOT_PATH,
-    openapi_url=f"{settings.API_PREFIX}/openapi.json",
+    openapi_url=None,
     docs_url=None,
 )
 
@@ -113,6 +116,28 @@ async def custom_swagger_ui_html(request: Request):
         openapi_url=openapi_url,
         title="j26-notifications-api - Swagger UI",
     )
+
+
+# --- Custom OpenAPI endpoint to include a root-path server for Swagger "Try it out" ---
+@app.get(f"{settings.API_PREFIX}/openapi.json", include_in_schema=False)
+async def custom_openapi(request: Request):
+    forwarded_prefix = request.headers.get("x-forwarded-prefix", "").rstrip("/")
+    root_path = forwarded_prefix or settings.ROOT_PATH.rstrip("/")
+
+    if app.openapi_schema is None:
+        app.openapi_schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            routes=app.routes,
+        )
+
+    schema = copy.deepcopy(app.openapi_schema)
+    if root_path:
+        schema["servers"] = [{"url": root_path}]
+    else:
+        schema.pop("servers", None)
+
+    return JSONResponse(schema)
 
 
 # --- Add a root endpoint for basic API health check ---
