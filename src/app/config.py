@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     FCM_PROJECT_ID: str
     FCM_CREDENTIALS_JSON: str
     API_PREFIX: str = "/api"
+    ROOT_PATH: str = ""
     SESSION_SECRET_KEY: str = "change-me"
     OAUTH_CLIENT_ID: str = ""
     OAUTH_CLIENT_SECRET: str = ""

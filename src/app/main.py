@@ -4,6 +4,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -61,13 +62,13 @@ async def lifespan(app: FastAPI):
 
 
 # --- Initialize FastAPI app with the lifespan manager and session middleware ---
-app = FastAPI()
 app = FastAPI(
     title="j26-notifications-api",
     version="0.1.0",
     lifespan=lifespan,
+    root_path=settings.ROOT_PATH,
     openapi_url=f"{settings.API_PREFIX}/openapi.json",
-    docs_url=f"{settings.API_PREFIX}/docs",
+    docs_url=None,
 )
 
 app.add_middleware(SessionMiddleware, secret_key=settings.SESSION_SECRET_KEY)
@@ -96,6 +97,22 @@ if not os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
     from .auth_api import auth_router
 
     app.include_router(auth_router, include_in_schema=False)  # We need the '/auth' API
+
+
+# --- Custom Swagger UI route with configurable root path ---
+@app.get(f"{settings.API_PREFIX}/docs", include_in_schema=False)
+async def custom_swagger_ui_html(request: Request):
+    forwarded_prefix = request.headers.get("x-forwarded-prefix", "").rstrip("/")
+    root_path = forwarded_prefix or settings.ROOT_PATH.rstrip("/")
+    openapi_url = (
+        f"{root_path}{settings.API_PREFIX}/openapi.json"
+        if root_path
+        else f"{settings.API_PREFIX}/openapi.json"
+    )
+    return get_swagger_ui_html(
+        openapi_url=openapi_url,
+        title="j26-notifications-api - Swagger UI",
+    )
 
 
 # --- Add a root endpoint for basic API health check ---
