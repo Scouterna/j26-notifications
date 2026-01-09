@@ -7,8 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -85,6 +84,16 @@ app.add_middleware(
 )
 
 
+# Add "no-cache" to all responses
+@app.middleware("http")
+async def no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
 # --- Add metrics API ---
 instrumentator.instrument(app)  # Adds Prometheus middleware during initialization
 instrumentator.expose(app)  # Registers /metrics endpoint before other catch-all routes
@@ -108,9 +117,7 @@ async def custom_swagger_ui_html(request: Request):
     forwarded_prefix = request.headers.get("x-forwarded-prefix", "").rstrip("/")
     root_path = forwarded_prefix or settings.ROOT_PATH.rstrip("/")
     openapi_url = (
-        f"{root_path}{settings.API_PREFIX}/openapi.json"
-        if root_path
-        else f"{settings.API_PREFIX}/openapi.json"
+        f"{root_path}{settings.API_PREFIX}/openapi.json" if root_path else f"{settings.API_PREFIX}/openapi.json"
     )
     return get_swagger_ui_html(
         openapi_url=openapi_url,

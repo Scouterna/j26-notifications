@@ -95,17 +95,13 @@ async def get_subscription_tokens(tenant: str, channel: str) -> list[str]:
         return []
     user_id_list = [f"{d['data']['user_id']}:{tenant}" for d in rows]
     rows = await db_fetch("SELECT data FROM tokens WHERE id = ANY($1::text[])", user_id_list)
-    if not rows:
-        return []
-    return [t for d in rows for t in d["data"]["device_tokens"]]
+    return [t for d in rows for t in d["data"]["device_tokens"]] if rows else []
 
 
 async def get_user_tokens(tenant: str, user_id: str) -> list[str]:
     token_id = f"{user_id}:{tenant}"
     row = await db_fetchrow("SELECT data FROM tokens WHERE id = $1", token_id)
-    if not row:
-        return []
-    return [t for t in row["data"]["device_tokens"]]
+    return [t for t in row["data"]["device_tokens"]] if row else []
 
 
 # --- API functions ---
@@ -188,7 +184,11 @@ async def subscribe_to_channel(
     #     )
     uid = user.preferred_username
     data = Subscription(id=f"{uid}@{channel}:{tenant}", tenant_id=tenant, channel_id=channel, user_id=uid)
-    await db_execute("INSERT INTO subscriptions (id, data) VALUES ($1, $2)", data.id, asdict(data))
+    await db_execute(
+        "INSERT INTO subscriptions (id, data) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+        data.id,
+        asdict(data),
+    )
     return data
 
 
