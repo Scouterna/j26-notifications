@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from .authenctication import AuthUser, require_auth_user
 from .config import get_settings
 from .db import db_execute, db_fetch, db_fetchrow
-from .tenants import get_tenant_id, is_tenant_admin
+from .tenants import Tenant, get_tenant, is_tenant_admin
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -76,6 +76,7 @@ async def channels_init() -> None:
     await db_execute(create_table)
     await db_execute("CREATE INDEX IF NOT EXISTS idx_tenant_id ON channels ((lower(data->>'tenant_id')))")
     await db_execute("CREATE INDEX IF NOT EXISTS idx_parent_id ON channels ((lower(data->>'parent_id')))")
+    await db_execute("CREATE INDEX IF NOT EXISTS idx_is_private ON channels (((data->>'is_private')::boolean));")
 
     row = await db_fetchrow("SELECT data FROM channels WHERE id='heartbeat'")
     if not row:  # Create a heartbeat channel
@@ -114,19 +115,24 @@ async def get_channel_id(channel_id: str):
 )
 async def list_channels(
     include_private: bool = Query(default=False, description="Also include private channels"),
-    tenant: str = Depends(get_tenant_id),
+    tenant: Tenant = Depends(get_tenant),
     user: AuthUser = Depends(require_auth_user),
 ):
     """
     Get all channels for a tenant
     """
-    # is_admin = user_is_tenant_admin(user, tenant)
-    # if include_private and not is_admin:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="Only tenant admins can view private channels.",
-    #     )
-    channels = await db_fetch("SELECT data FROM channels WHERE data->>'tenant_id' = $1", tenant)
+    if include_private and not is_tenant_admin(tenant, user.preferred_username):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tenant admins can view private channels.",
+        )
+    if include_private:
+        channels = await db_fetch("SELECT data FROM channels WHERE data->>'tenant_id' = $1", tenant.id)
+    else:
+        channels = await db_fetch(
+            "SELECT data FROM channels WHERE data->>'tenant_id' = $1 AND (data->>'is_private')::boolean = false",
+            tenant.id,
+        )
     return [d["data"] for d in channels] if channels else []
 
 
@@ -134,12 +140,12 @@ async def list_channels(
     "", response_model=ChannelRead, status_code=status.HTTP_201_CREATED, response_description="Channel created"
 )
 async def create_channel(
-    payload: ChannelCreate, tenant: str = Depends(get_tenant_id), user: AuthUser = Depends(require_auth_user)
+    payload: ChannelCreate, tenant: Tenant = Depends(get_tenant), user: AuthUser = Depends(require_auth_user)
 ):
     """
     Create a new channel
     """
-    if not await is_tenant_admin(tenant, user.preferred_username):
+    if not is_tenant_admin(tenant, user.preferred_username):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required.",
@@ -159,11 +165,14 @@ async def create_channel(
             )
 
     data = payload.model_dump()
-    data.update({"tenant_id": tenant, "updated_at": str(datetime.now(timezone.utc)), "updated_by": user.subject})
-    await db_execute("INSERT INTO channels (id, data) VALUES ($1, $2)", payload.id, data)
+    data["tenant_id"] = tenant.id
+    data["updated_by"] = user.preferred_username
+    channel = Channel(**data)
+    # data.update({"tenant_id": tenant.id, "updated_at": str(datetime.now(timezone.utc)), "updated_by": user.subject})
+    await db_execute("INSERT INTO channels (id, data) VALUES ($1, $2)", channel.id, asdict(channel))
     # channel = await db_fetchrow("SELECT data FROM channels WHERE id=$1", payload.id)
     # return channel["data"]
-    return data
+    return asdict(channel)
 
 
 # @channels_router.patch("/{channel_key}", response_model=ChannelRead)
@@ -186,16 +195,16 @@ async def create_channel(
     "/{channel_id}", response_model=None, status_code=status.HTTP_204_NO_CONTENT, response_description="Channel deleted"
 )
 async def delete_channel(
-    channel_id: str, tenant: str = Depends(get_tenant_id), user: AuthUser = Depends(require_auth_user)
+    channel_id: str, tenant: Tenant = Depends(get_tenant), user: AuthUser = Depends(require_auth_user)
 ):
     """
     Delete channel
     """
-    # if not user_is_tenant_admin(current_user, tenant):
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="Admin privileges required.",
-    #     )
+    if not is_tenant_admin(tenant, user.preferred_username):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required.",
+        )
     channel = await db_fetchrow("SELECT data FROM channels WHERE id=$1", channel_id)
     if not channel:
         raise HTTPException(

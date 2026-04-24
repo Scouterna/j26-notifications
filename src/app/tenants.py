@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import cast
 
+from async_lru import alru_cache
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -59,17 +60,19 @@ class TenantRead(TenantBase):
 # --- Tenant dependency function ---
 
 
-async def get_tenant_id(tenant_id: str):
-    tenant = await db_fetchrow("SELECT data FROM tenants WHERE id=$1", tenant_id)
-    if not tenant:
+@alru_cache(maxsize=1024, ttl=600)
+async def get_tenant(tenant_id: str) -> Tenant:
+    row = await db_fetchrow("SELECT data FROM tenants WHERE id=$1", tenant_id)
+    if not row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Tenant not found.",
         )
-    return tenant_id
+    tenant = Tenant(**row["data"])
+    return tenant
 
 
-async def is_tenant_admin(tenant_id: str, user_id: str) -> bool:
+def is_tenant_admin(tenant: Tenant, user_id: str) -> bool:
     return True
 
 
@@ -119,7 +122,7 @@ async def list_tenants(user: AuthUser = Depends(require_auth_user)):
     status_code=status.HTTP_200_OK,
     response_description="Returns requested tenant",
 )
-async def get_tenant(tenant: str = Depends(get_tenant_id), user: AuthUser = Depends(require_auth_user)):
+async def get_tenant_info(tenant: Tenant = Depends(get_tenant), user: AuthUser = Depends(require_auth_user)):
     """
     Return information about a specific tenant.
     """

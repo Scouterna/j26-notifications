@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 async def heartbeats_init() -> None:
-    asyncio.create_task(heartbeats_loop())
+    # asyncio.create_task(heartbeats_loop())
     return
 
 
