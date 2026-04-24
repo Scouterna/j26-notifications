@@ -5,15 +5,18 @@
 # VSCode
 .vscode
 
+# Github
+.github
+
 # Docker
 Dockerfile
 .dockerignore
 
 # Python
-src/.venv
-src/__pycache__
+.venv
+**/__pycache__
+**/*.pyc
 src/.env
-src/*.pyc
 
 # Other
-k8s
+.k8s
