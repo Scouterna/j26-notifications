@@ -1,0 +1,25 @@
+[project]
+dependencies = [
+    "fastapi[standard]",
+    "httpx[http2]",
+    "joserfc",
+    "itsdangerous",
+    "async-lru",
+    "asyncpg",
+    "firebase_admin",
+    "prometheus-fastapi-instrumentator",
+    #    "authlib"   # Just for dev
+]
+
+name = "j26-notifications"
+version = "0.2.0"
+requires-python = ">=3.14"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
