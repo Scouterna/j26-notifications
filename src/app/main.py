@@ -10,7 +10,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_fastapi_instrumentator import Instrumentator, metrics
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -27,7 +27,17 @@ from .tenants import tenants_init, tenants_router
 # from .info_api import router as info_router
 
 # --- Create instrumentor, settings and logger objects ---
-instrumentator = Instrumentator()
+instrumentator = Instrumentator(
+    excluded_handlers=["/metrics"],
+    should_instrument_requests_inprogress=True,
+    inprogress_name="http_requests_inprogress",
+    inprogress_labels=True,
+)
+instrumentator.add(
+    metrics.default(
+        latency_lowr_buckets=(0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 1.0, float("inf")),
+    )
+)
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
