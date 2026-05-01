@@ -13,7 +13,7 @@ dependencies = [
 
 name = "j26-notifications"
 version = "0.2.0"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 
 [dependency-groups]
 dev = ["pytest>=8,<10"]

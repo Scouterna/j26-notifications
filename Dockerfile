@@ -1,5 +1,5 @@
 # Use a slim Python image for the application
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 # Install uv as the package manager
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
