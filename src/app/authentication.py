@@ -87,9 +87,13 @@ def _extract_roles(claims: dict[str, Any]) -> list[str]:
 
 async def require_auth_user(request: Request) -> AuthUser:
     """
-    FastAPI dependency that validates the auth cookie and returns user info + roles.
+    FastAPI dependency that validates the auth cookie or Bearer token and returns user info + roles.
     """
     token = request.cookies.get("j26-auth_access-token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[len("Bearer "):]
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
         # return AuthUser(
