@@ -1,4 +1,3 @@
-# from pathlib import Path
 import copy
 import logging
 import os
@@ -9,20 +8,11 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator, metrics
-from starlette.middleware.cors import CORSMiddleware
-from starlette.middleware.sessions import SessionMiddleware
 
-from .channels import channels_init, channels_router
 from .config import get_settings
-from .db import close_db_connection, connect_to_db
-from .exeptions import J26NotificationError
+from .db import J26NotificationError, close_db_connection, connect_to_db, db_init_tables
 from .firebase import firebase_init
-from .heartbeats import heartbeats_init
-from .notifications import notifications_init, notifications_router
-from .subscriptions import subscriptions_init, subscriptions_router
-from .tenants import tenants_init, tenants_router
-
-# from .info_api import router as info_router
+from .notifications import notifications_router
 
 # --- Create instrumentor, settings and logger objects ---
 instrumentator = Instrumentator(
@@ -40,54 +30,35 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
-# --- Lifespan event handler to create DB indexes on startup ---
+# --- Lifespan event handler to, e.g., create DB indexes on startup ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Manages application startup and shutdown events.
-    Creates database indexes on startup and start the heartbeats
-    """
     await connect_to_db()
-    await tenants_init()
-    await channels_init()
-    await subscriptions_init()
-    await notifications_init()
+    await db_init_tables()
     await firebase_init()
-    await heartbeats_init()
+    logger.info("j26-notifications started and is accepting connections!")
 
     try:
-        yield  # Run FastAPI!
+        yield
 
     except Exception as e:
         if isinstance(e, J26NotificationError):
-            # logging.fatal("J26NotificationError error: %s", str(e), exc_info=False)
             pass
         else:
-            # logg§ing.fatal("Unexpected fatal error: %s", str(e), exc_info=True)
             pass
 
-    finally:  # Make sure DB connection is closed on exit
+    finally:
         await close_db_connection()
 
 
 # --- Initialize FastAPI app with the lifespan manager and session middleware ---
 app = FastAPI(
-    title="j26-notifications-api",
-    version="0.1.0",
+    title="j26-notifications",
+    version="0.2.0",
     lifespan=lifespan,
     root_path=settings.ROOT_PATH,
     openapi_url=None,
     docs_url=None,
-)
-
-app.add_middleware(SessionMiddleware, secret_key=settings.SESSION_SECRET_KEY)
-# Allow credentials and permit all origins via a regex (wildcard + credentials is not allowed)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=".*",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
 )
 
 
@@ -102,20 +73,20 @@ async def no_cache_headers(request: Request, call_next):
 
 
 # --- Add metrics API ---
-instrumentator.instrument(app)  # Adds Prometheus middleware during initialization
-instrumentator.expose(app)  # Registers /metrics endpoint before other catch-all routes
-
+instrumentator.instrument(app)
+instrumentator.expose(app)
 
 # --- Include the API routers ---
-app.include_router(tenants_router, prefix=settings.API_PREFIX)
-app.include_router(channels_router, prefix=settings.API_PREFIX)
-app.include_router(subscriptions_router, prefix=settings.API_PREFIX)
 app.include_router(notifications_router, prefix=settings.API_PREFIX)
 
-if not os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/namespace"):  # We are running in dev
+# Running locally
+if not os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/namespace"):
+    from starlette.middleware.sessions import SessionMiddleware
+
     from .auth_api import auth_router
 
-    app.include_router(auth_router, include_in_schema=False)  # We need the '/auth' API
+    app.add_middleware(SessionMiddleware, secret_key="dev-only-static-secret")
+    app.include_router(auth_router, include_in_schema=False)  # We need the '/auth' API locally
 
 
 # --- Custom Swagger UI route with configurable root path ---

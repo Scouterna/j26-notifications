@@ -1,25 +1,21 @@
 from __future__ import annotations
 
-import json
 import logging
 
 import asyncpg
 from asyncpg import Pool, Record
-from asyncpg.exceptions import UniqueViolationError
 
 from .config import get_settings
-from .exeptions import J26NotificationError
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
+class J26NotificationError(Exception):
+    """Raised for expected application-level errors, e.g. database connection failure."""
+
+
 pg_pool: Pool | None = None
-
-
-async def _init_connection(conn: asyncpg.Connection) -> None:
-    await conn.set_type_codec("json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog", format="text")
-    await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog", format="text")
 
 
 async def connect_to_db() -> Pool:
@@ -27,7 +23,7 @@ async def connect_to_db() -> Pool:
     if pg_pool is None:
         logger.info("Connecting to DB")
         try:
-            pg_pool = await asyncpg.create_pool(dsn=settings.POSTGRES_DSN, init=_init_connection)
+            pg_pool = await asyncpg.create_pool(dsn=settings.POSTGRES_DSN)
         except ConnectionRefusedError:
             raise J26NotificationError("Can't connect to database")
         logger.debug("Connected to DB")
@@ -58,3 +54,25 @@ async def db_fetchrow(query: str, *args) -> Record | None:
     async with pg_pool.acquire() as conn:
         logger.debug(f"PSQL: {query}")
         return await conn.fetchrow(query, *args)
+
+
+async def db_init_tables() -> None:
+    logger.info("Initializing database tables")
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id  TEXT PRIMARY KEY,
+            channels TEXT[] NOT NULL DEFAULT '{}',
+            tokens   TEXT[] NOT NULL DEFAULT '{}'
+        )
+    """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id        BIGSERIAL PRIMARY KEY,
+            channel   TEXT        NOT NULL,
+            message   TEXT        NOT NULL,
+            timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    await db_execute("CREATE INDEX IF NOT EXISTS messages_channel_idx   ON messages (channel)")
+    await db_execute("CREATE INDEX IF NOT EXISTS messages_timestamp_idx ON messages (timestamp)")
+    logger.info("Database tables ready")

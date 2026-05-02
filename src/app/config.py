@@ -5,13 +5,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     POSTGRES_DSN: str
-    DEFAULT_TENANT: str = "jamboree26"
-    DEFAULT_TENANT_NAME: str = "J26 Notifications"
     FCM_PROJECT_ID: str
     FCM_CREDENTIALS_JSON: str
+    KC_ADMIN_API: str = "https://admin.dev.id.scouterna.se"
+    KC_REALM: str = "jamboree26"
+    KC_SA_ACCOUNT: str = "j26-notifications"
+    KC_SA_ACCOUNT_KEY: str
     API_PREFIX: str = "/api"
     ROOT_PATH: str = ""
-    SESSION_SECRET_KEY: str = "change-me"
     OAUTH_CLIENT_ID: str = ""
     OAUTH_CLIENT_SECRET: str = ""
     OAUTH_METATADATA_URL: str = ""

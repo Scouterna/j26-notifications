@@ -162,6 +162,6 @@ cython_debug/
 
 # Only for development env
 src/app/auth_api.py
-k8s
+.k8s
 
 
