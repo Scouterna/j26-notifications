@@ -29,9 +29,9 @@ class User:
 
 @dataclass
 class Message:
-    message: str  # JSON string: {"title": ..., "body": ...}
+    message: str  # JSON string: {"notification": {...}, ...}
     channel: str
-    timestamp: str
+    sent_at: str
 
 
 # --- API models ---
@@ -58,7 +58,7 @@ class MessageRead(BaseModel):
     id: int
     channel: str
     message: str
-    timestamp: str
+    sent_at: str
 
 
 def is_sender(user: AuthUser) -> bool:
@@ -130,7 +130,7 @@ async def list_notifications(
                 id=r["id"],
                 channel=r["channel"],
                 message=r["message"],
-                timestamp=r["timestamp"].isoformat(),
+                sent_at=r["timestamp"].isoformat(),
             )
             for r in rows
         ]
