@@ -15,7 +15,7 @@ _jwks_keyset_cache: dict[str, KeySet] = {}
 
 class AuthUser(BaseModel):
     subject: str
-    name: str
+    name: str | None = None
     preferred_username: str
     email: str | None = None
     roles: list[str] = Field(default_factory=list)
@@ -23,7 +23,7 @@ class AuthUser(BaseModel):
 
     def __str__(self) -> str:
         uid = self.preferred_username or self.subject
-        return f"{self.name} ({uid})"
+        return f"{self.name or uid} ({uid})"
 
 
 async def get_jwks_keyset(request: Request) -> KeySet | None:
