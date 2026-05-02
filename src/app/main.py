@@ -56,7 +56,6 @@ async def lifespan(app: FastAPI):
     await heartbeats_init()
 
     try:
-
         yield  # Run FastAPI!
 
     except Exception as e:

@@ -9,7 +9,7 @@ from .authenctication import AuthUser, require_auth_user
 from .channels import get_channel_id
 from .config import get_settings
 from .db import db_execute, db_fetch, db_fetchrow
-from .tenants import get_tenant_id, is_tenant_admin
+from .tenants import Tenant, get_tenant, is_tenant_admin
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -87,19 +87,19 @@ async def subscriptions_init() -> None:
 # --- Subscription and token functions ---
 
 
-async def get_subscription_tokens(tenant: str, channel: str) -> list[str]:
+async def get_subscription_tokens(tenant_id: str, channel: str) -> list[str]:
     rows = await db_fetch(
         "SELECT data FROM subscriptions WHERE data->>'tenant_id' = $1 AND data->>'channel_id' = $2", tenant, channel
     )
     if not rows:
         return []
-    user_id_list = [f"{d['data']['user_id']}:{tenant}" for d in rows]
+    user_id_list = [f"{d['data']['user_id']}:{tenant_id}" for d in rows]
     rows = await db_fetch("SELECT data FROM tokens WHERE id = ANY($1::text[])", user_id_list)
     return [t for d in rows for t in d["data"]["device_tokens"]] if rows else []
 
 
-async def get_user_tokens(tenant: str, user_id: str) -> list[str]:
-    token_id = f"{user_id}:{tenant}"
+async def get_user_tokens(tenant_id: str, user_id: str) -> list[str]:
+    token_id = f"{user_id}:{tenant_id}"
     row = await db_fetchrow("SELECT data FROM tokens WHERE id = $1", token_id)
     return [t for t in row["data"]["device_tokens"]] if row else []
 
@@ -114,17 +114,17 @@ async def get_user_tokens(tenant: str, user_id: str) -> list[str]:
 )
 async def save_user_token(
     payload: TokenCreate,
-    tenant: str = Depends(get_tenant_id),
+    tenant: Tenant = Depends(get_tenant),
     user: AuthUser = Depends(require_auth_user),
 ):
     """
     Save notifications tokens
     """
     uid = user.preferred_username
-    token_id = f"{uid}:{tenant}"
+    token_id = f"{uid}:{tenant.id}"
     data = Tokens(
         id=token_id,
-        tenant_id=tenant,
+        tenant_id=tenant.id,
         device_tokens=payload.device_tokens,
     )
     row = await db_fetchrow("SELECT data FROM tokens WHERE id=$1", token_id)
@@ -150,15 +150,16 @@ async def save_user_token(
     response_description="Subscription list",
 )
 async def list_subscriptions(
-    tenant: str = Depends(get_tenant_id),
+    tenant: Tenant = Depends(get_tenant),
     user: AuthUser = Depends(require_auth_user),
 ):
     """
     Returns a list of subscribed notification channels for the current user
     """
-    uid = user.preferred_username
     rows = await db_fetch(
-        "SELECT data FROM subscriptions WHERE data->>'tenant_id' = $1 AND data->>'user_id' = $2", tenant, uid
+        "SELECT data FROM subscriptions WHERE data->>'tenant_id' = $1 AND data->>'user_id' = $2",
+        tenant.id,
+        user.preferred_username,
     )
     return [d["data"] for d in rows] if rows else []
 
@@ -170,20 +171,20 @@ async def list_subscriptions(
 )
 async def subscribe_to_channel(
     # payload: SubscriptionCreate,
-    tenant: str = Depends(get_tenant_id),
+    tenant: Tenant = Depends(get_tenant),
     channel: str = Depends(get_channel_id),
     user: AuthUser = Depends(require_auth_user),
 ):
     """
     Subscribe to a notification channel
     """
-    # if payload.user_id and not await is_tenant_admin(tenant, user.preferred_username):
+    # if payload.user_id and not is_tenant_admin(tenant, user.preferred_username):
     #     raise HTTPException(
     #         status_code=status.HTTP_403_FORBIDDEN,
     #         detail="Only tenant admins can register other users.",
     #     )
     uid = user.preferred_username
-    data = Subscription(id=f"{uid}@{channel}:{tenant}", tenant_id=tenant, channel_id=channel, user_id=uid)
+    data = Subscription(id=f"{uid}@{channel}:{tenant}", tenant_id=tenant.id, channel_id=channel, user_id=uid)
     await db_execute(
         "INSERT INTO subscriptions (id, data) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
         data.id,
@@ -198,8 +199,8 @@ async def subscribe_to_channel(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def unsubscribe_from_channel(
-    tenant: str = Depends(get_tenant_id),
-    channel: str = Depends(get_channel_id),
+    tenant: Tenant = Depends(get_tenant),
+    channel_id: str = Depends(get_channel_id),
     user: AuthUser = Depends(require_auth_user),
 ):
     """
@@ -208,8 +209,8 @@ async def unsubscribe_from_channel(
     uid = user.preferred_username
     row = await db_fetchrow(
         "SELECT data FROM subscriptions WHERE data->>'tenant_id' = $1 AND data->>'channel_id' = $2 AND data->>'user_id' = $3",
-        tenant,
-        channel,
+        tenant.id,
+        channel_id,
         uid,
     )
     if not row:
