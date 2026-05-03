@@ -53,6 +53,10 @@ def is_sender(user: AuthUser) -> bool:
     return "j26-notifications:notification-sender" in user.roles
 
 
+def _primary_translation(notification: dict[str, "NotificationTranslation"]) -> "NotificationTranslation":
+    return notification.get("en") or notification["sv"]
+
+
 async def _resolve_user_channels(user: AuthUser) -> list[str]:
     """Return the user's channels from DB, auto-registering with empty tokens if not found."""
     row = await db_fetchrow("SELECT channels FROM users WHERE user_id = $1", user.preferred_username)
@@ -92,13 +96,14 @@ async def _fetch_messages(
 
 def _row_to_notification(r) -> NotificationRead:
     msg = json.loads(r["message"])
-    en = msg.get("notification", {}).get("en", {})
+    translations = msg.get("notification", {})
+    t = translations.get("en") or translations.get("sv") or {}
     return NotificationRead(
         id=r["id"],
         channel_id=r["channel"],
         message=r["message"],
-        title=en.get("title", ""),
-        body=en.get("body", ""),
+        title=t.get("title", ""),
+        body=t.get("body", ""),
         sent_at=r["timestamp"].isoformat(),
     )
 
@@ -225,8 +230,8 @@ async def _do_send_notification(payload: NotificationCreate) -> None:
         tokens = await _persist_and_collect_tokens(payload.channels, message_json, now)
 
     if tokens:
-        en = payload.notification["en"]
-        await firebase_send(list(tokens), en.title, en.body, message_json)
+        t = _primary_translation(payload.notification)
+        await firebase_send(list(tokens), t.title, t.body, message_json)
 
 
 @notifications_router.post("/notifications", status_code=status.HTTP_202_ACCEPTED)
@@ -237,8 +242,8 @@ async def send_notification(
 ):
     if not is_sender(user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required.")
-    if "en" not in payload.notification:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="English translation ('en') is required.")
+    if "en" not in payload.notification and "sv" not in payload.notification:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="At least one of 'en' or 'sv' translation is required.")
 
     background_tasks.add_task(_do_send_notification, payload)
     return {"status": "accepted"}
