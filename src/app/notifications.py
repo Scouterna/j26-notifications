@@ -1,6 +1,5 @@
 import json
 import logging
-from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -15,23 +14,6 @@ logger = logging.getLogger(__name__)
 
 TENANT_PREFIX = "/tenants/jamboree26"
 notifications_router = APIRouter(prefix=TENANT_PREFIX, tags=["notifications"])
-
-
-# --- Data classes ---
-
-
-@dataclass
-class User:
-    user_id: str
-    channels: list[str]
-    tokens: list[str]
-
-
-@dataclass
-class Message:
-    message: str  # JSON string: {"notification": {...}, ...}
-    channel: str
-    sent_at: str
 
 
 # --- API models ---
@@ -58,13 +40,90 @@ class NotificationRead(BaseModel):
     id: int
     channel_id: str
     title: str  # compat: English title extracted from message
-    body: str  # compat: English body extracted from message
+    body: str   # compat: English body extracted from message
     message: str
     sent_at: str
 
 
+# --- Helpers ---
+
+
 def is_sender(user: AuthUser) -> bool:
     return "j26-notifications:notification-sender" in user.roles
+
+
+async def _resolve_user_channels(user: AuthUser) -> list[str]:
+    """Return the user's channels from DB, auto-registering with empty tokens if not found."""
+    row = await db_fetchrow("SELECT channels FROM users WHERE user_id = $1", user.preferred_username)
+    if row:
+        return list(row["channels"])
+    channels = await get_user_groups(user.preferred_username)
+    channels.append(user.preferred_username)
+    await db_execute(
+        "INSERT INTO users (user_id, channels, tokens) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        user.preferred_username, channels, [],
+    )
+    return channels
+
+
+async def _fetch_messages(
+    channels: list[str],
+    count: int,
+    not_before: str | None,
+    not_after: str | None,
+) -> list[NotificationRead]:
+    params: list = [channels]
+    conditions = ["channel = ANY($1)"]
+    if not_before:
+        params.append(not_before)
+        conditions.append(f"timestamp > ${len(params)}::timestamptz")
+    if not_after:
+        params.append(not_after)
+        conditions.append(f"timestamp < ${len(params)}::timestamptz")
+    params.append(count)
+    query = (
+        "SELECT id, channel, message, timestamp FROM messages"
+        " WHERE " + " AND ".join(conditions) + f" ORDER BY timestamp DESC LIMIT ${len(params)}"
+    )
+    rows = await db_fetch(query, *params)
+    return [_row_to_notification(r) for r in rows]
+
+
+def _row_to_notification(r) -> NotificationRead:
+    msg = json.loads(r["message"])
+    en = msg.get("notification", {}).get("en", {})
+    return NotificationRead(
+        id=r["id"],
+        channel_id=r["channel"],
+        message=r["message"],
+        title=en.get("title", ""),
+        body=en.get("body", ""),
+        sent_at=r["timestamp"].isoformat(),
+    )
+
+
+async def _collect_tokens(channels: list[str], message_json: str, now: datetime) -> set[str]:
+    """Insert a message row per channel and return all unique FCM tokens for those channels."""
+    tokens: set[str] = set()
+    for channel in channels:
+        await db_execute(
+            "INSERT INTO messages (channel, message, timestamp) VALUES ($1, $2, $3)",
+            channel, message_json, now,
+        )
+        rows = await db_fetch("SELECT tokens FROM users WHERE $1 = ANY(channels)", channel)
+        for r in rows:
+            tokens.update(r["tokens"])
+    return tokens
+
+
+async def _collect_all_tokens(message_json: str, now: datetime) -> set[str]:
+    """Insert a single @all message row and return tokens from all registered users."""
+    await db_execute(
+        "INSERT INTO messages (channel, message, timestamp) VALUES ($1, $2, $3)",
+        "@all", message_json, now,
+    )
+    rows = await db_fetch("SELECT tokens FROM users")
+    return {token for r in rows for token in r["tokens"]}
 
 
 # --- Endpoints ---
@@ -86,9 +145,7 @@ async def register_users(
             SET channels = EXCLUDED.channels,
                 tokens   = EXCLUDED.tokens
         """,
-        user.preferred_username,
-        channels,
-        payload.tokens,
+        user.preferred_username, channels, payload.tokens,
     )
     return {"status": "ok"}
 
@@ -101,53 +158,10 @@ async def list_notifications(
     not_after: str | None = Query(default=None),
     channel: list[str] | None = Query(default=None),  # ignored, kept for compat
 ):
-    user_channels = ["@all"]
+    channels = ["@all"]
     if user is not None:
-        row = await db_fetchrow(
-            "SELECT channels FROM users WHERE user_id = $1",
-            user.preferred_username,
-        )
-        if row:
-            user_channels.extend(row["channels"])
-        else:
-            channels = await get_user_groups(user.preferred_username)
-            channels.append(user.preferred_username)
-            await db_execute(
-                "INSERT INTO users (user_id, channels, tokens) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-                user.preferred_username, channels, [],
-            )
-            user_channels.extend(channels)
-
-    params: list = [user_channels]
-    conditions = ["channel = ANY($1)"]
-    if not_before:
-        params.append(not_before)
-        conditions.append(f"timestamp > ${len(params)}::timestamptz")
-    if not_after:
-        params.append(not_after)
-        conditions.append(f"timestamp < ${len(params)}::timestamptz")
-    params.append(count)
-    query = (
-        "SELECT id, channel, message, timestamp FROM messages"
-        " WHERE " + " AND ".join(conditions) + f" ORDER BY timestamp DESC LIMIT ${len(params)}"
-    )
-
-    rows = await db_fetch(query, *params)
-    result = []
-    for r in rows:
-        msg = json.loads(r["message"])
-        en = msg.get("notification", {}).get("en", {})
-        result.append(
-            NotificationRead(
-                id=r["id"],
-                channel_id=r["channel"],
-                message=r["message"],
-                title=en.get("title", ""),
-                body=en.get("body", ""),
-                sent_at=r["timestamp"].isoformat(),
-            )
-        )
-    return result
+        channels.extend(await _resolve_user_channels(user))
+    return await _fetch_messages(channels, count, not_before, not_after)
 
 
 @notifications_router.post("/notifications", status_code=status.HTTP_200_OK)
@@ -158,43 +172,23 @@ async def send_notification(
     if not is_sender(user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required.")
     if "en" not in payload.notification:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="English translation ('en') is required."
-        )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="English translation ('en') is required.")
 
     now = datetime.now(timezone.utc)
-    message_json = json.dumps(
-        {
-            "notification": {lang: t.model_dump() for lang, t in payload.notification.items()},
-            "category": payload.category,
-            "important": payload.important,
-            "link": payload.link,
-        }
-    )
+    message_json = json.dumps({
+        "notification": {lang: t.model_dump() for lang, t in payload.notification.items()},
+        "category": payload.category,
+        "important": payload.important,
+        "link": payload.link,
+    })
 
-    # Collect unique tokens across all target channels, then send once
-    all_tokens: set[str] = set()
     if "@all" in payload.channels:
-        await db_execute(
-            "INSERT INTO messages (channel, message, timestamp) VALUES ($1, $2, $3)",
-            "@all", message_json, now,
-        )
-        rows = await db_fetch("SELECT tokens FROM users")
-        for r in rows:
-            all_tokens.update(r["tokens"])
+        tokens = await _collect_all_tokens(message_json, now)
     else:
-        for channel in payload.channels:
-            await db_execute(
-                "INSERT INTO messages (channel, message, timestamp) VALUES ($1, $2, $3)",
-                channel, message_json, now,
-            )
-            rows = await db_fetch("SELECT tokens FROM users WHERE $1 = ANY(channels)", channel)
-            if rows:
-                for r in rows:
-                    all_tokens.update(r["tokens"])
+        tokens = await _collect_tokens(payload.channels, message_json, now)
 
-    if all_tokens:
+    if tokens:
         en = payload.notification["en"]
-        await firebase_send(list(all_tokens), en.title, en.body, message_json)
+        await firebase_send(list(tokens), en.title, en.body, message_json)
 
     return {"status": "ok"}
