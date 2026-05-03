@@ -56,8 +56,10 @@ class NotificationCreate(BaseModel):
 
 class MessageRead(BaseModel):
     id: int
-    channel: str
+    channel_id: str
     message: str
+    title: str           # compat: English title extracted from message
+    body: str            # compat: English body extracted from message
     sent_at: str
 
 
@@ -124,19 +126,19 @@ async def list_notifications(
     )
 
     rows = await db_fetch(query, *params)
-    return (
-        [
-            MessageRead(
-                id=r["id"],
-                channel=r["channel"],
-                message=r["message"],
-                sent_at=r["timestamp"].isoformat(),
-            )
-            for r in rows
-        ]
-        if rows
-        else []
-    )
+    result = []
+    for r in rows:
+        msg = json.loads(r["message"])
+        en = msg.get("notification", {}).get("en", {})
+        result.append(MessageRead(
+            id=r["id"],
+            channel_id=r["channel"],
+            message=r["message"],
+            title=en.get("title", ""),
+            body=en.get("body", ""),
+            sent_at=r["timestamp"].isoformat(),
+        ))
+    return result
 
 
 @notifications_router.post("/notifications", status_code=status.HTTP_200_OK)
