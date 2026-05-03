@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -103,13 +104,29 @@ def _row_to_notification(r) -> NotificationRead:
 
 
 async def _sync_channel_members(channel: str) -> None:
-    """Refresh group membership from Keycloak and upsert each member into users table.
+    """Refresh group membership from Keycloak, only writing to DB for users whose channels changed.
     If Keycloak is unavailable, logs a warning and skips the sync."""
     try:
         usernames = await get_group_members(channel)
+        if not usernames:
+            return
+
+        # Fetch current DB state for all members in one query
+        rows = await db_fetch(
+            "SELECT user_id, channels FROM users WHERE user_id = ANY($1)",
+            usernames,
+        )
+        db_channels: dict[str, set[str]] = {r["user_id"]: set(r["channels"]) for r in rows}
+
+        t0 = time.perf_counter()
+        updates = 0
         for username in usernames:
-            user_channels = await get_user_groups(username)
-            user_channels.append(username)
+            kc_channels = await get_user_groups(username)
+            kc_channels.append(username)
+            kc_set = set(kc_channels)
+            if db_channels.get(username) == kc_set:
+                continue  # no change, skip DB write
+            updates += 1
             await db_execute(
                 """
                 INSERT INTO users (user_id, channels, tokens)
@@ -117,8 +134,12 @@ async def _sync_channel_members(channel: str) -> None:
                 ON CONFLICT (user_id) DO UPDATE
                     SET channels = EXCLUDED.channels
                 """,
-                username, user_channels,
+                username, kc_channels,
             )
+        logger.debug(
+            "Keycloak sync for %s: %d members, %d updated, %.0fms",
+            channel, len(usernames), updates, (time.perf_counter() - t0) * 1000,
+        )
     except Exception as exc:
         logger.warning("Keycloak sync failed for channel %s, using existing DB data: %s", channel, exc)
 
