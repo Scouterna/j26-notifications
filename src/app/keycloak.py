@@ -18,7 +18,7 @@ async def get_kc_token() -> str:
     if _kc_token_cache and _kc_token_cache[1] > now:
         return _kc_token_cache[0]
 
-    url = f"{settings.KC_ADMIN_API}/realms/{settings.KC_REALM}/protocol/openid-connect/token"
+    url = f"{settings.KC_API}/realms/{settings.KC_REALM}/protocol/openid-connect/token"
     async with httpx.AsyncClient(timeout=5.0) as client:
         response = await client.post(url, data={
             "grant_type": "client_credentials",
@@ -38,7 +38,7 @@ async def get_group_members(group_path: str) -> list[str]:
     """Return usernames of all members of the group identified by path (e.g. '/scoutnet/784')."""
     token = await get_kc_token()
     headers = {"Authorization": f"Bearer {token}"}
-    base = f"{settings.KC_ADMIN_API}/admin/realms/{settings.KC_REALM}"
+    base = f"{settings.KC_API}/admin/realms/{settings.KC_REALM}"
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         # Search for group by path — API may return parent groups with the match nested inside
@@ -85,7 +85,7 @@ async def get_user_groups(username: str) -> list[str]:
     """Return group paths for the given username (e.g. 'scoutnet|3073781')."""
     token = await get_kc_token()
     headers = {"Authorization": f"Bearer {token}"}
-    base = f"{settings.KC_ADMIN_API}/admin/realms/{settings.KC_REALM}"
+    base = f"{settings.KC_API}/admin/realms/{settings.KC_REALM}"
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         # Resolve username to Keycloak user ID

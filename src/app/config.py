@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     POSTGRES_DSN: str
     FCM_PROJECT_ID: str
     FCM_CREDENTIALS_JSON: str
-    KC_ADMIN_API: str = "https://admin.dev.id.scouterna.se"
+    KC_API: str = "https://admin.dev.id.scouterna.se"
     KC_REALM: str = "jamboree26"
     KC_SA_ACCOUNT: str = "j26-notifications"
     KC_SA_ACCOUNT_KEY: str

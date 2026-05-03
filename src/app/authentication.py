@@ -7,9 +7,13 @@ from joserfc import jwt
 from joserfc.jwk import KeySet
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
+from .config import get_settings
 
-_jwks_keyset_cache: dict[str, KeySet] = {}
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+_JWKS_URL = f"{settings.KC_API}/realms/{settings.KC_REALM}/protocol/openid-connect/certs"
+_jwks_keyset: KeySet | None = None
 
 
 class AuthUser(BaseModel):
@@ -25,38 +29,32 @@ class AuthUser(BaseModel):
         return f"{self.name or uid} ({uid})"
 
 
-async def _get_jwks_keyset(request: Request) -> KeySet | None:
-    """
-    Convert the JWKS dictionary into a key set usable for verification.
-    """
-    cache_key = str(request.base_url)
 
-    if cache_key in _jwks_keyset_cache:
-        return _jwks_keyset_cache[cache_key]
 
-    # url = urljoin(str(request.base_url), "auth/keys")
-    # url = "https://id.maws.se/realms/J26-test/protocol/openid-connect/certs"
-    url = "https://dev.id.scouterna.se/realms/jamboree26/protocol/openid-connect/certs"
+async def _get_jwks_keyset() -> KeySet | None:
+    global _jwks_keyset
+    if _jwks_keyset is not None:
+        return _jwks_keyset
+
     try:
         async with httpx.AsyncClient(timeout=5.0) as http_client:
-            response = await http_client.get(url)
+            response = await http_client.get(_JWKS_URL)
             response.raise_for_status()
             jwks_dict = response.json()
     except Exception as exc:
-        logger.warning("Failed to fetch %s: %s", url, exc)
+        logger.warning("Failed to fetch %s: %s", _JWKS_URL, exc)
         return None
 
     try:
-        keyset = KeySet.import_key_set(jwks_dict)
-        _jwks_keyset_cache[cache_key] = keyset
-        return keyset
+        _jwks_keyset = KeySet.import_key_set(jwks_dict)
+        return _jwks_keyset
     except Exception as exc:
         logger.warning("Failed to parse JWKS: %s", exc)
         return None
 
 
-async def _decode_access_token(token: str, request: Request) -> dict[str, Any]:
-    keyset = await _get_jwks_keyset(request)
+async def _decode_access_token(token: str) -> dict[str, Any]:
+    keyset = await _get_jwks_keyset()
     if keyset is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Token validation unavailable")
 
@@ -85,7 +83,7 @@ def _extract_roles(claims: dict[str, Any]) -> list[str]:
 
 
 async def _build_auth_user(token: str, request: Request) -> AuthUser:
-    claims = await _decode_access_token(token, request)
+    claims = await _decode_access_token(token)
     return AuthUser(
         subject=claims.get("sub", ""),
         name=claims.get("name"),
