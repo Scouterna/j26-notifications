@@ -11,6 +11,9 @@ settings = get_settings()
 # Cached service-account token: (access_token, expires_at)
 _kc_token_cache: tuple[str, datetime] | None = None
 
+# Cached group path → Keycloak group ID (permanent, group IDs never change)
+_group_id_cache: dict[str, str] = {}
+
 
 async def get_kc_token() -> str:
     global _kc_token_cache
@@ -41,26 +44,30 @@ async def get_group_members(group_path: str) -> list[str]:
     base = f"{settings.KC_API}/admin/realms/{settings.KC_REALM}"
 
     async with httpx.AsyncClient(timeout=10.0) as client:
-        # Search for group by path — API may return parent groups with the match nested inside
-        name = group_path.rstrip("/").split("/")[-1]
-        r = await client.get(f"{base}/groups", headers=headers, params={"search": name, "exact": "true"})
-        r.raise_for_status()
+        if group_path in _group_id_cache:
+            group_id = _group_id_cache[group_path]
+        else:
+            name = group_path.rstrip("/").split("/")[-1]
+            r = await client.get(f"{base}/groups", headers=headers, params={"search": name, "exact": "true"})
+            r.raise_for_status()
 
-        def _find(groups: list, path: str) -> dict | None:
-            for g in groups:
-                if g["path"] == path:
-                    return g
-                found = _find(g.get("subGroups", []), path)
-                if found:
-                    return found
-            return None
+            def _find(groups: list, path: str) -> dict | None:
+                for g in groups:
+                    if g["path"] == path:
+                        return g
+                    found = _find(g.get("subGroups", []), path)
+                    if found:
+                        return found
+                return None
 
-        group = _find(r.json(), group_path)
-        if group is None:
-            logger.warning("Group not found: %s", group_path)
-            return []
+            group = _find(r.json(), group_path)
+            if group is None:
+                logger.warning("Group not found: %s", group_path)
+                return []
 
-        group_id = group["id"]
+            group_id = group["id"]
+            _group_id_cache[group_path] = group_id
+            logger.debug("Cached group ID for %s: %s", group_path, group_id)
         usernames: list[str] = []
         first = 0
         page_size = 100
