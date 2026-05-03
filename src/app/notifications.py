@@ -102,7 +102,7 @@ def _row_to_notification(r) -> NotificationRead:
     )
 
 
-async def _collect_tokens(channels: list[str], message_json: str, now: datetime) -> set[str]:
+async def _persist_and_collect_tokens(channels: list[str], message_json: str, now: datetime) -> set[str]:
     """Insert a message row per channel and return all unique FCM tokens for those channels."""
     tokens: set[str] = set()
     for channel in channels:
@@ -116,7 +116,7 @@ async def _collect_tokens(channels: list[str], message_json: str, now: datetime)
     return tokens
 
 
-async def _collect_all_tokens(message_json: str, now: datetime) -> set[str]:
+async def _persist_and_collect_all_tokens(message_json: str, now: datetime) -> set[str]:
     """Insert a single @all message row and return tokens from all registered users."""
     await db_execute(
         "INSERT INTO messages (channel, message, timestamp) VALUES ($1, $2, $3)",
@@ -185,9 +185,9 @@ async def send_notification(
     })
 
     if "@all" in payload.channels:
-        tokens = await _collect_all_tokens(message_json, now)
+        tokens = await _persist_and_collect_all_tokens(message_json, now)
     else:
-        tokens = await _collect_tokens(payload.channels, message_json, now)
+        tokens = await _persist_and_collect_tokens(payload.channels, message_json, now)
 
     if tokens:
         en = payload.notification["en"]
