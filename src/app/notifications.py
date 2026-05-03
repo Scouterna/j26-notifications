@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -12,6 +13,7 @@ from .firebase import firebase_send
 from .keycloak import get_group_members, get_user_groups
 
 logger = logging.getLogger(__name__)
+_send_lock = asyncio.Lock()
 
 TENANT_PREFIX = "/tenants/jamboree26"
 notifications_router = APIRouter(prefix=TENANT_PREFIX, tags=["notifications"])
@@ -41,7 +43,7 @@ class NotificationRead(BaseModel):
     id: int
     channel_id: str
     title: str  # compat: English title extracted from message
-    body: str   # compat: English body extracted from message
+    body: str  # compat: English body extracted from message
     message: str
     sent_at: str
 
@@ -66,7 +68,9 @@ async def _resolve_user_channels(user: AuthUser) -> list[str]:
     channels.append(user.preferred_username)
     await db_execute(
         "INSERT INTO users (user_id, channels, tokens) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-        user.preferred_username, channels, [],
+        user.preferred_username,
+        channels,
+        [],
     )
     return channels
 
@@ -139,11 +143,15 @@ async def _sync_channel_members(channel: str) -> None:
                 ON CONFLICT (user_id) DO UPDATE
                     SET channels = EXCLUDED.channels
                 """,
-                username, kc_channels,
+                username,
+                kc_channels,
             )
         logger.debug(
             "Keycloak sync for %s: %d members, %d updated, %.0fms",
-            channel, len(usernames), updates, (time.perf_counter() - t0) * 1000,
+            channel,
+            len(usernames),
+            updates,
+            (time.perf_counter() - t0) * 1000,
         )
     except Exception as exc:
         logger.warning("Keycloak sync failed for channel %s, using existing DB data: %s", channel, exc)
@@ -151,17 +159,26 @@ async def _sync_channel_members(channel: str) -> None:
 
 async def _persist_and_collect_tokens(channels: list[str], message_json: str, now: datetime) -> set[str]:
     """Sync group members from Keycloak, insert a message row per channel, and return all unique FCM tokens."""
+    t0 = time.perf_counter()
     tokens: set[str] = set()
     for channel in channels:
         if channel.startswith("/"):
             await _sync_channel_members(channel)
         await db_execute(
             "INSERT INTO messages (channel, message, timestamp) VALUES ($1, $2, $3)",
-            channel, message_json, now,
+            channel,
+            message_json,
+            now,
         )
         rows = await db_fetch("SELECT tokens FROM users WHERE $1 = ANY(channels)", channel)
         for r in rows:
             tokens.update(r["tokens"])
+    logger.info(
+        "Channel update for %s: %.0fms total, %d tokens collected",
+        channels,
+        (time.perf_counter() - t0) * 1000,
+        len(tokens),
+    )
     return tokens
 
 
@@ -169,7 +186,9 @@ async def _persist_and_collect_all_tokens(message_json: str, now: datetime) -> s
     """Insert a single @all message row and return tokens from all registered users."""
     await db_execute(
         "INSERT INTO messages (channel, message, timestamp) VALUES ($1, $2, $3)",
-        "@all", message_json, now,
+        "@all",
+        message_json,
+        now,
     )
     rows = await db_fetch("SELECT tokens FROM users")
     return {token for r in rows for token in r["tokens"]}
@@ -196,7 +215,9 @@ async def register_users(
                     SELECT DISTINCT unnest(users.tokens || EXCLUDED.tokens)
                 )
         """,
-        user.preferred_username, channels, payload.tokens,
+        user.preferred_username,
+        channels,
+        payload.tokens,
     )
     return {"status": "ok"}
 
@@ -216,22 +237,25 @@ async def list_notifications(
 
 
 async def _do_send_notification(payload: NotificationCreate) -> None:
-    now = datetime.now(timezone.utc)
-    message_json = json.dumps({
-        "notification": {lang: t.model_dump() for lang, t in payload.notification.items()},
-        "category": payload.category,
-        "important": payload.important,
-        "link": payload.link,
-    })
+    async with _send_lock:
+        now = datetime.now(timezone.utc)
+        message_json = json.dumps(
+            {
+                "notification": {lang: t.model_dump() for lang, t in payload.notification.items()},
+                "category": payload.category,
+                "important": payload.important,
+                "link": payload.link,
+            }
+        )
 
-    if "@all" in payload.channels:
-        tokens = await _persist_and_collect_all_tokens(message_json, now)
-    else:
-        tokens = await _persist_and_collect_tokens(payload.channels, message_json, now)
+        if "@all" in payload.channels:
+            tokens = await _persist_and_collect_all_tokens(message_json, now)
+        else:
+            tokens = await _persist_and_collect_tokens(payload.channels, message_json, now)
 
-    if tokens:
-        t = _primary_translation(payload.notification)
-        await firebase_send(list(tokens), t.title, t.body, message_json)
+        if tokens:
+            t = _primary_translation(payload.notification)
+            await firebase_send(list(tokens), t.title, t.body, message_json)
 
 
 @notifications_router.post("/notifications", status_code=status.HTTP_202_ACCEPTED)
@@ -243,7 +267,10 @@ async def send_notification(
     if not is_sender(user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required.")
     if "en" not in payload.notification and "sv" not in payload.notification:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="At least one of 'en' or 'sv' translation is required.")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="At least one of 'en' or 'sv' translation is required.",
+        )
 
     background_tasks.add_task(_do_send_notification, payload)
     return {"status": "accepted"}
