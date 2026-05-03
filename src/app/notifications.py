@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from .authentication import AuthUser, require_auth_user
+from .authentication import AuthUser, optional_auth_user, require_auth_user
 from .db import db_execute, db_fetch, db_fetchrow
 from .firebase import firebase_send
 from .keycloak import get_user_groups
@@ -54,12 +54,12 @@ class NotificationCreate(BaseModel):
     link: str | None = None
 
 
-class MessageRead(BaseModel):
+class NotificationRead(BaseModel):
     id: int
     channel_id: str
+    title: str  # compat: English title extracted from message
+    body: str  # compat: English body extracted from message
     message: str
-    title: str           # compat: English title extracted from message
-    body: str            # compat: English body extracted from message
     sent_at: str
 
 
@@ -93,23 +93,22 @@ async def register_users(
     return {"status": "ok"}
 
 
-@notifications_router.get("/notifications", response_model=list[MessageRead], status_code=status.HTTP_200_OK)
+@notifications_router.get("/notifications", response_model=list[NotificationRead], status_code=status.HTTP_200_OK)
 async def list_notifications(
-    user: AuthUser = Depends(require_auth_user),
+    user: AuthUser | None = Depends(optional_auth_user),
     count: int = Query(default=50, ge=1, le=200),
     not_before: str | None = Query(default=None),
     not_after: str | None = Query(default=None),
     channel: list[str] | None = Query(default=None),  # ignored, kept for compat
 ):
-    row = await db_fetchrow(
-        "SELECT channels FROM users WHERE user_id = $1",
-        user.preferred_username,
-    )
-    if not row:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User not registered.")
-    user_channels: list[str] = row["channels"]
-    if not user_channels:
-        return []
+    user_channels = ["@all"]
+    if user is not None:
+        row = await db_fetchrow(
+            "SELECT channels FROM users WHERE user_id = $1",
+            user.preferred_username,
+        )
+        if row:
+            user_channels.extend(row["channels"])
 
     params: list = [user_channels]
     conditions = ["channel = ANY($1)"]
@@ -130,14 +129,16 @@ async def list_notifications(
     for r in rows:
         msg = json.loads(r["message"])
         en = msg.get("notification", {}).get("en", {})
-        result.append(MessageRead(
-            id=r["id"],
-            channel_id=r["channel"],
-            message=r["message"],
-            title=en.get("title", ""),
-            body=en.get("body", ""),
-            sent_at=r["timestamp"].isoformat(),
-        ))
+        result.append(
+            NotificationRead(
+                id=r["id"],
+                channel_id=r["channel"],
+                message=r["message"],
+                title=en.get("title", ""),
+                body=en.get("body", ""),
+                sent_at=r["timestamp"].isoformat(),
+            )
+        )
     return result
 
 
@@ -149,27 +150,40 @@ async def send_notification(
     if not is_sender(user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required.")
     if "en" not in payload.notification:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="English translation ('en') is required.")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="English translation ('en') is required."
+        )
 
     now = datetime.now(timezone.utc)
-    message_json = json.dumps({
-        "notification": {lang: t.model_dump() for lang, t in payload.notification.items()},
-        "category": payload.category,
-        "important": payload.important,
-        "link": payload.link,
-    })
+    message_json = json.dumps(
+        {
+            "notification": {lang: t.model_dump() for lang, t in payload.notification.items()},
+            "category": payload.category,
+            "important": payload.important,
+            "link": payload.link,
+        }
+    )
 
     # Collect unique tokens across all target channels, then send once
     all_tokens: set[str] = set()
-    for channel in payload.channels:
+    if "@all" in payload.channels:
         await db_execute(
             "INSERT INTO messages (channel, message, timestamp) VALUES ($1, $2, $3)",
-            channel, message_json, now,
+            "@all", message_json, now,
         )
-        rows = await db_fetch("SELECT tokens FROM users WHERE $1 = ANY(channels)", channel)
-        if rows:
-            for r in rows:
-                all_tokens.update(r["tokens"])
+        rows = await db_fetch("SELECT tokens FROM users")
+        for r in rows:
+            all_tokens.update(r["tokens"])
+    else:
+        for channel in payload.channels:
+            await db_execute(
+                "INSERT INTO messages (channel, message, timestamp) VALUES ($1, $2, $3)",
+                channel, message_json, now,
+            )
+            rows = await db_fetch("SELECT tokens FROM users WHERE $1 = ANY(channels)", channel)
+            if rows:
+                for r in rows:
+                    all_tokens.update(r["tokens"])
 
     if all_tokens:
         en = payload.notification["en"]

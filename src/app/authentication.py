@@ -1,6 +1,5 @@
 import logging
 from typing import Any
-from urllib.parse import urljoin
 
 import httpx
 from fastapi import HTTPException, Request, status
@@ -26,7 +25,7 @@ class AuthUser(BaseModel):
         return f"{self.name or uid} ({uid})"
 
 
-async def get_jwks_keyset(request: Request) -> KeySet | None:
+async def _get_jwks_keyset(request: Request) -> KeySet | None:
     """
     Convert the JWKS dictionary into a key set usable for verification.
     """
@@ -56,8 +55,8 @@ async def get_jwks_keyset(request: Request) -> KeySet | None:
         return None
 
 
-async def decode_access_token(token: str, request: Request) -> dict[str, Any]:
-    keyset = await get_jwks_keyset(request)
+async def _decode_access_token(token: str, request: Request) -> dict[str, Any]:
+    keyset = await _get_jwks_keyset(request)
     if keyset is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Token validation unavailable")
 
@@ -85,32 +84,39 @@ def _extract_roles(claims: dict[str, Any]) -> list[str]:
     return sorted(roles)
 
 
-async def require_auth_user(request: Request) -> AuthUser:
-    """
-    FastAPI dependency that validates the auth cookie or Bearer token and returns user info + roles.
-    """
-    token = request.cookies.get("j26-auth_access-token")
-    if not token:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[len("Bearer "):]
-    if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-        # return AuthUser(
-        #     subject="c6e9889e-e550-11f0-ae1a-30138b8c0e56",
-        #     name="Fake User",
-        #     preferred_username="scoutnet|1234567",
-        #     email="fake.user@scouterna.se",
-        #     roles=[],
-        # )
-
-    claims = await decode_access_token(token, request)
-
+async def _build_auth_user(token: str, request: Request) -> AuthUser:
+    claims = await _decode_access_token(token, request)
     return AuthUser(
         subject=claims.get("sub", ""),
         name=claims.get("name"),
         preferred_username=claims.get("preferred_username"),
         email=claims.get("email"),
         roles=_extract_roles(claims),
-        # claims=claims,
     )
+
+
+def _extract_token(request: Request) -> str | None:
+    token = request.cookies.get("j26-auth_access-token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[len("Bearer ") :]
+    return token or None
+
+
+# --- Authentication dependeny functions ---
+async def optional_auth_user(request: Request) -> AuthUser | None:
+    token = _extract_token(request)
+    if not token:
+        return None
+    try:
+        return await _build_auth_user(token, request)
+    except HTTPException:
+        return None
+
+
+async def require_auth_user(request: Request) -> AuthUser:
+    token = _extract_token(request)
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    return await _build_auth_user(token, request)
