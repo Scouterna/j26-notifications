@@ -64,7 +64,7 @@ class NotificationRead(BaseModel):
 
 
 def is_sender(user: AuthUser) -> bool:
-    return "notification-sender" in user.roles
+    return "j26-notifications:notification-sender" in user.roles
 
 
 # --- Endpoints ---

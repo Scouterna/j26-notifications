@@ -75,9 +75,9 @@ def _extract_roles(claims: dict[str, Any]) -> list[str]:
     roles.update(role for role in realm_roles if isinstance(role, str))
 
     resource_access = claims.get("resource_access") or {}
-    for resource in resource_access.values():
+    for client_id, resource in resource_access.items():
         resource_roles = resource.get("roles") if isinstance(resource, dict) else []
-        roles.update(role for role in (resource_roles or []) if isinstance(role, str))
+        roles.update(f"{client_id}:{role}" for role in (resource_roles or []) if isinstance(role, str))
 
     return sorted(roles)
 
