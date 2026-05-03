@@ -143,7 +143,9 @@ async def register_users(
         VALUES ($1, $2, $3)
         ON CONFLICT (user_id) DO UPDATE
             SET channels = EXCLUDED.channels,
-                tokens   = EXCLUDED.tokens
+                tokens   = ARRAY(
+                    SELECT DISTINCT unnest(users.tokens || EXCLUDED.tokens)
+                )
         """,
         user.preferred_username, channels, payload.tokens,
     )
