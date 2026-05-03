@@ -23,7 +23,10 @@ async def connect_to_db() -> Pool:
     if pg_pool is None:
         logger.info("Connecting to DB")
         try:
-            pg_pool = await asyncpg.create_pool(dsn=settings.POSTGRES_DSN)
+            pg_pool = await asyncpg.create_pool(
+                dsn=settings.POSTGRES_DSN,
+                max_inactive_connection_lifetime=60,
+            )
         except ConnectionRefusedError:
             raise J26NotificationError("Can't connect to database")
         logger.debug("Connected to DB")
