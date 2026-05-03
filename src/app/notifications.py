@@ -109,6 +109,14 @@ async def list_notifications(
         )
         if row:
             user_channels.extend(row["channels"])
+        else:
+            channels = await get_user_groups(user.preferred_username)
+            channels.append(user.preferred_username)
+            await db_execute(
+                "INSERT INTO users (user_id, channels, tokens) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                user.preferred_username, channels, [],
+            )
+            user_channels.extend(channels)
 
     params: list = [user_channels]
     conditions = ["channel = ANY($1)"]
