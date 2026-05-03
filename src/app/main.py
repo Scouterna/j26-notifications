@@ -81,11 +81,19 @@ app.include_router(notifications_router, prefix=settings.API_PREFIX)
 
 # Running locally
 if not os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/namespace"):
+    from starlette.middleware.cors import CORSMiddleware
     from starlette.middleware.sessions import SessionMiddleware
 
     from .auth_api import auth_router
 
     app.add_middleware(SessionMiddleware, secret_key="dev-only-static-secret")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.include_router(auth_router, include_in_schema=False)  # We need the '/auth' API locally
 
 
