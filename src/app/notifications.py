@@ -2,13 +2,13 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from .authentication import AuthUser, optional_auth_user, require_auth_user
 from .db import db_execute, db_fetch, db_fetchrow
 from .firebase import firebase_send
-from .keycloak import get_user_groups
+from .keycloak import get_group_members, get_user_groups
 
 logger = logging.getLogger(__name__)
 
@@ -102,10 +102,33 @@ def _row_to_notification(r) -> NotificationRead:
     )
 
 
+async def _sync_channel_members(channel: str) -> None:
+    """Refresh group membership from Keycloak and upsert each member into users table.
+    If Keycloak is unavailable, logs a warning and skips the sync."""
+    try:
+        usernames = await get_group_members(channel)
+        for username in usernames:
+            user_channels = await get_user_groups(username)
+            user_channels.append(username)
+            await db_execute(
+                """
+                INSERT INTO users (user_id, channels, tokens)
+                VALUES ($1, $2, '{}')
+                ON CONFLICT (user_id) DO UPDATE
+                    SET channels = EXCLUDED.channels
+                """,
+                username, user_channels,
+            )
+    except Exception as exc:
+        logger.warning("Keycloak sync failed for channel %s, using existing DB data: %s", channel, exc)
+
+
 async def _persist_and_collect_tokens(channels: list[str], message_json: str, now: datetime) -> set[str]:
-    """Insert a message row per channel and return all unique FCM tokens for those channels."""
+    """Sync group members from Keycloak, insert a message row per channel, and return all unique FCM tokens."""
     tokens: set[str] = set()
     for channel in channels:
+        if channel.startswith("/"):
+            await _sync_channel_members(channel)
         await db_execute(
             "INSERT INTO messages (channel, message, timestamp) VALUES ($1, $2, $3)",
             channel, message_json, now,
@@ -166,16 +189,7 @@ async def list_notifications(
     return await _fetch_messages(channels, count, not_before, not_after)
 
 
-@notifications_router.post("/notifications", status_code=status.HTTP_200_OK)
-async def send_notification(
-    payload: NotificationCreate,
-    user: AuthUser = Depends(require_auth_user),
-):
-    if not is_sender(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required.")
-    if "en" not in payload.notification:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="English translation ('en') is required.")
-
+async def _do_send_notification(payload: NotificationCreate) -> None:
     now = datetime.now(timezone.utc)
     message_json = json.dumps({
         "notification": {lang: t.model_dump() for lang, t in payload.notification.items()},
@@ -193,4 +207,17 @@ async def send_notification(
         en = payload.notification["en"]
         await firebase_send(list(tokens), en.title, en.body, message_json)
 
-    return {"status": "ok"}
+
+@notifications_router.post("/notifications", status_code=status.HTTP_202_ACCEPTED)
+async def send_notification(
+    payload: NotificationCreate,
+    background_tasks: BackgroundTasks,
+    user: AuthUser = Depends(require_auth_user),
+):
+    if not is_sender(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required.")
+    if "en" not in payload.notification:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="English translation ('en') is required.")
+
+    background_tasks.add_task(_do_send_notification, payload)
+    return {"status": "accepted"}
