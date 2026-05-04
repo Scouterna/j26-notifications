@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 # --- Lifespan event handler to, e.g., create DB indexes on startup ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("FastAPI started")
     await connect_to_db()
     await db_init_tables()
     await firebase_init()

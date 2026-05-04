@@ -8,7 +8,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 ENV TZ="Europe/Stockholm"
 
 # Set environment variables to prevent Python from writing .pyc files on build
-ENV PYTHONDONTWRITEBYTECODE=1
+# Will decrease size but increase startup time
+# ENV PYTHONDONTWRITEBYTECODE=1
+
+# Ensures Python's stdout/stderr goes directly to the container logs without buffering
 ENV PYTHONUNBUFFERED=1
 
 # Set the working directory in the container
