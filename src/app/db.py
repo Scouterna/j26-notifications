@@ -69,13 +69,16 @@ async def db_init_tables() -> None:
         )
     """)
     await db_execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id        BIGSERIAL PRIMARY KEY,
-            channel   TEXT        NOT NULL,
-            message   TEXT        NOT NULL,
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        CREATE TABLE IF NOT EXISTS notifications (
+            id        BIGSERIAL    PRIMARY KEY,
+            channels  TEXT[]       NOT NULL,
+            message   TEXT         NOT NULL,
+            timestamp TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            sender    TEXT         NOT NULL DEFAULT '',
+            important BOOLEAN      NOT NULL DEFAULT false
         )
     """)
-    await db_execute("CREATE INDEX IF NOT EXISTS messages_channel_idx   ON messages (channel)")
-    await db_execute("CREATE INDEX IF NOT EXISTS messages_timestamp_idx ON messages (timestamp)")
+    await db_execute("CREATE INDEX IF NOT EXISTS notifications_channels_idx  ON notifications USING GIN (channels)")
+    await db_execute("CREATE INDEX IF NOT EXISTS notifications_timestamp_idx ON notifications (timestamp)")
+    await db_execute("CREATE INDEX IF NOT EXISTS notifications_important_idx ON notifications (important) WHERE important")
     logger.info("Database tables ready")
