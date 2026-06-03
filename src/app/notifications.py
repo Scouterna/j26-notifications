@@ -62,10 +62,6 @@ def is_sender(user: AuthUser) -> bool:
     return "j26-notifications:notification-sender" in user.roles
 
 
-def _primary_translation(notification: dict[str, "NotificationTranslation"]) -> "NotificationTranslation":
-    return notification.get("en") or notification["sv"]
-
-
 async def _resolve_user_channels(user: AuthUser) -> list[str]:
     """Return the user's channels from DB, auto-registering with empty tokens if not found."""
     row = await db_fetchrow("SELECT channels FROM users WHERE user_id = $1", user.preferred_username)
@@ -220,10 +216,10 @@ async def _collect_all_tokens() -> set[str]:
     return {token for r in rows for token in r["tokens"]}
 
 
-async def _do_send_notification(tokens: set[str], title: str, body: str, message_json: str) -> None:
+async def _do_send_notification(tokens: set[str], message_json: str) -> None:
     async with _send_lock:
         if tokens:
-            await firebase_send(list(tokens), title, body, message_json)
+            await firebase_send(list(tokens), message_json)
 
 
 # --- Endpoints ---
@@ -300,7 +296,6 @@ async def send_notification(
     else:
         tokens = await _collect_tokens(payload.channels)
 
-    t = _primary_translation(payload.notification)
-    background_tasks.add_task(_do_send_notification, tokens, t.title, t.body, message_json)
+    background_tasks.add_task(_do_send_notification, tokens, message_json)
 
     return {"id": msg_id, "status": "accepted"}
