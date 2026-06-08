@@ -43,6 +43,74 @@ async def get_kc_token() -> str:
     return data["access_token"]
 
 
+async def get_all_groups() -> list[str]:
+    """Return all valid channel paths: every subgroup under GROUP_PREFIX, with
+    that prefix stripped (e.g. '/j26-leader/j26-rover'), sorted.
+
+    Fetched fresh from Keycloak on every call. TODO: once the group list is
+    stable, cache the result (e.g. populate once at pod startup) instead of
+    hitting Keycloak on every request."""
+    token = await get_kc_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    base = f"{settings.KC_API}/admin/realms/{settings.KC_REALM}"
+    page_size = 100
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        # Resolve the GROUP_PREFIX root group.
+        name = GROUP_PREFIX.rstrip("/").split("/")[-1]
+        r = await client.get(f"{base}/groups", headers=headers, params={"search": name, "exact": "true"})
+        r.raise_for_status()
+
+        def _find(groups: list, path: str) -> dict | None:
+            for g in groups:
+                if g["path"] == path:
+                    return g
+                found = _find(g.get("subGroups", []), path)
+                if found:
+                    return found
+            return None
+
+        root = _find(r.json(), GROUP_PREFIX)
+        if root is None:
+            logger.warning("Group prefix not found: %s", GROUP_PREFIX)
+            return []
+
+        async def _children(group_id: str) -> list[dict]:
+            out: list[dict] = []
+            first = 0
+            while True:
+                r = await client.get(
+                    f"{base}/groups/{group_id}/children",
+                    headers=headers,
+                    params={"first": first, "max": page_size},
+                )
+                r.raise_for_status()
+                page = r.json()
+                out.extend(page)
+                if len(page) < page_size:
+                    break
+                first += page_size
+            return out
+
+        # Keycloak returns subgroups via the /children endpoint (inline
+        # subGroups is empty under briefRepresentation); recurse using
+        # subGroupCount to decide when to descend.
+        paths: list[str] = []
+
+        async def _walk(group: dict) -> None:
+            paths.append(group["path"])
+            if group.get("subGroupCount", 0):
+                for child in await _children(group["id"]):
+                    await _walk(child)
+
+        for child in await _children(root["id"]):
+            await _walk(child)
+
+    stripped = sorted(p[len(GROUP_PREFIX):] for p in paths)
+    logger.debug("Fetched %d groups under %s", len(stripped), GROUP_PREFIX)
+    return stripped
+
+
 async def get_group_members(group_path: str) -> list[str]:
     """Return usernames of all members of the group identified by its stripped
     path (e.g. '/j26-leader/j26-rover'). The GROUP_PREFIX is prepended to

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from .authentication import AuthUser, optional_auth_user, require_auth_user
 from .db import db_execute, db_fetch, db_fetchrow
 from .firebase import firebase_send
-from .keycloak import get_group_members, get_user_groups
+from .keycloak import get_all_groups, get_group_members, get_user_groups
 
 logger = logging.getLogger(__name__)
 _send_lock = asyncio.Lock()
@@ -263,6 +263,13 @@ async def list_notifications(
     if user is not None:
         channels.extend(await _resolve_user_channels(user))
     return await _fetch_notifications(channels, count, not_before, not_after, important_prio)
+
+
+@notifications_router.get("/groups", response_model=list[str], status_code=status.HTTP_200_OK)
+async def list_groups():
+    """Return all valid channel groups from Keycloak (paths stripped of the
+    /j26-scoutid-sync prefix). Public endpoint."""
+    return await get_all_groups()
 
 
 @notifications_router.post("/notifications", response_model=NotificationSent, status_code=status.HTTP_202_ACCEPTED)
