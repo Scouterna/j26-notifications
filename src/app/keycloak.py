@@ -14,6 +14,12 @@ _kc_token_cache: tuple[str, datetime] | None = None
 # Cached group path → Keycloak group ID (permanent, group IDs never change)
 _group_id_cache: dict[str, str] = {}
 
+# Only subgroups under this Keycloak path are considered valid channels. The
+# prefix is stripped from group paths everywhere in the application, e.g. the
+# Keycloak group "/j26-scoutid-sync/j26-leader/j26-rover" is treated as
+# "/j26-leader/j26-rover".
+GROUP_PREFIX = "/j26-scoutid-sync"
+
 
 async def get_kc_token() -> str:
     global _kc_token_cache
@@ -38,16 +44,19 @@ async def get_kc_token() -> str:
 
 
 async def get_group_members(group_path: str) -> list[str]:
-    """Return usernames of all members of the group identified by path (e.g. '/scoutnet/784')."""
+    """Return usernames of all members of the group identified by its stripped
+    path (e.g. '/j26-leader/j26-rover'). The GROUP_PREFIX is prepended to
+    resolve the actual Keycloak group."""
     token = await get_kc_token()
     headers = {"Authorization": f"Bearer {token}"}
     base = f"{settings.KC_API}/admin/realms/{settings.KC_REALM}"
+    kc_path = GROUP_PREFIX + group_path
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         if group_path in _group_id_cache:
             group_id = _group_id_cache[group_path]
         else:
-            name = group_path.rstrip("/").split("/")[-1]
+            name = kc_path.rstrip("/").split("/")[-1]
             r = await client.get(f"{base}/groups", headers=headers, params={"search": name, "exact": "true"})
             r.raise_for_status()
 
@@ -60,9 +69,9 @@ async def get_group_members(group_path: str) -> list[str]:
                         return found
                 return None
 
-            group = _find(r.json(), group_path)
+            group = _find(r.json(), kc_path)
             if group is None:
-                logger.warning("Group not found: %s", group_path)
+                logger.warning("Group not found: %s", kc_path)
                 return []
 
             group_id = group["id"]
@@ -89,7 +98,9 @@ async def get_group_members(group_path: str) -> list[str]:
 
 
 async def get_user_groups(username: str) -> list[str]:
-    """Return group paths for the given username (e.g. 'scoutnet|3073781')."""
+    """Return the user's valid channel paths: only groups that are subgroups of
+    GROUP_PREFIX, with that prefix stripped (e.g. the Keycloak group
+    "/j26-scoutid-sync/j26-leader" is returned as "/j26-leader")."""
     token = await get_kc_token()
     headers = {"Authorization": f"Bearer {token}"}
     base = f"{settings.KC_API}/admin/realms/{settings.KC_REALM}"
@@ -109,6 +120,7 @@ async def get_user_groups(username: str) -> list[str]:
         r.raise_for_status()
         groups = r.json()
 
-    paths = [g["path"] for g in groups]
+    prefix = GROUP_PREFIX + "/"
+    paths = [g["path"][len(GROUP_PREFIX):] for g in groups if g["path"].startswith(prefix)]
     logger.debug("User %s is member of groups: %s", username, paths)
     return paths
