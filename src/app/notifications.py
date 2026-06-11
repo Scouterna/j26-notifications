@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from .authentication import AuthUser, optional_auth_user, require_auth_user
 from .db import db_execute, db_fetch, db_fetchrow
 from .firebase import firebase_send
+from .groups import group_path_name_to_id
 from .keycloak import get_all_groups, get_group_members, get_user_groups
 
 logger = logging.getLogger(__name__)
@@ -181,7 +182,9 @@ async def _sync_channel_members(channel: str) -> None:
         logger.warning("Keycloak sync failed for channel %s, using existing DB data: %s", channel, exc)
 
 
-async def _insert_notification(channels: list[str], message_json: str, now: datetime, sender: str, important: bool) -> int:
+async def _insert_notification(
+    channels: list[str], message_json: str, now: datetime, sender: str, important: bool
+) -> int:
     row = await db_fetchrow(
         "INSERT INTO notifications (channels, message, timestamp, sender, important) VALUES ($1, $2, $3, $4, $5) RETURNING id",
         channels,
@@ -286,6 +289,10 @@ async def send_notification(
             detail="At least one of 'en' or 'sv' translation is required.",
         )
 
+    # Translate "/group/<name>" -> "/group/<id>" so storage and member
+    # resolution use numeric IDs; other channels pass through unchanged.
+    channels = [group_path_name_to_id(c) for c in payload.channels]
+
     now = datetime.now(timezone.utc)
     message_json = json.dumps(
         {
@@ -296,12 +303,12 @@ async def send_notification(
         }
     )
 
-    msg_id = await _insert_notification(payload.channels, message_json, now, user.preferred_username, payload.important)
+    msg_id = await _insert_notification(channels, message_json, now, user.preferred_username, payload.important)
 
-    if "@all" in payload.channels:
+    if "@all" in channels:
         tokens = await _collect_all_tokens()
     else:
-        tokens = await _collect_tokens(payload.channels)
+        tokens = await _collect_tokens(channels)
 
     background_tasks.add_task(_do_send_notification, tokens, message_json)
 

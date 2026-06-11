@@ -1,9 +1,11 @@
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 
 from .config import get_settings
+from .groups import group_path_id_to_name
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -19,6 +21,31 @@ _group_id_cache: dict[str, str] = {}
 # Keycloak group "/j26-scoutid-sync/j26-leader/j26-rover" is treated as
 # "/j26-leader/j26-rover".
 GROUP_PREFIX = "/j26-scoutid-sync"
+
+# Main groups (first path segment) that can only have members in their
+# subgroups, never directly. Their bare main-group path is not a selectable
+# channel (excluded from get_all_groups), and membership in one of their
+# subgroups does NOT synthesize the parent main-group channel (unlike e.g.
+# "/leader/rover", which also makes the user a member of "/leader").
+SUBGROUP_ONLY_MAIN_GROUPS = {"/district", "/group", "/village"}
+
+
+def _main_group(path: str) -> str:
+    """Return the top-level main-group path of a channel, e.g. '/leader/rover'
+    and '/leader' both map to '/leader'."""
+    return "/" + path.lstrip("/").split("/", 1)[0]
+
+
+def _find_group(groups: list, path: str) -> dict | None:
+    """Recursively search a list of Keycloak group dicts (and their subGroups)
+    for the one whose 'path' matches."""
+    for g in groups:
+        if g["path"] == path:
+            return g
+        found = _find_group(g.get("subGroups", []), path)
+        if found:
+            return found
+    return None
 
 
 async def get_kc_token() -> str:
@@ -43,7 +70,34 @@ async def get_kc_token() -> str:
     return data["access_token"]
 
 
+# TEMPORARY: get_all_groups() reads this file instead of querying Keycloak, so
+# the returned list can be changed with external tools without restarting the
+# app. One group path per line; blank lines and lines starting with '#' are
+# ignored. To restore live behaviour, make get_all_groups() call
+# _get_all_groups_from_keycloak() again and remove this file + constant.
+_TEMP_GROUPS_FILE = Path(__file__).with_name("temp_groups.txt")
+
+
 async def get_all_groups() -> list[str]:
+    """Return all valid channel paths, with the GROUP_PREFIX stripped, sorted.
+
+    TEMPORARY: reads the list fresh from _TEMP_GROUPS_FILE on every call. The
+    live Keycloak implementation is kept in _get_all_groups_from_keycloak()."""
+    try:
+        lines = _TEMP_GROUPS_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        logger.warning("Could not read temp groups file %s: %s", _TEMP_GROUPS_FILE, exc)
+        return []
+    groups = {line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")}
+    # Drop bare subgroup-only main groups (e.g. "/group", "/village"): they are
+    # not selectable channels, only their subgroups are.
+    groups -= SUBGROUP_ONLY_MAIN_GROUPS
+    # Translate "/group/<id>" -> "/group/<name>" so clients see human-readable
+    # group names; all other channels pass through unchanged.
+    return sorted(group_path_id_to_name(g) for g in groups)
+
+
+async def _get_all_groups_from_keycloak() -> list[str]:
     """Return all valid channel paths: every subgroup under GROUP_PREFIX, with
     that prefix stripped (e.g. '/j26-leader/j26-rover'), sorted.
 
@@ -61,16 +115,7 @@ async def get_all_groups() -> list[str]:
         r = await client.get(f"{base}/groups", headers=headers, params={"search": name, "exact": "true"})
         r.raise_for_status()
 
-        def _find(groups: list, path: str) -> dict | None:
-            for g in groups:
-                if g["path"] == path:
-                    return g
-                found = _find(g.get("subGroups", []), path)
-                if found:
-                    return found
-            return None
-
-        root = _find(r.json(), GROUP_PREFIX)
+        root = _find_group(r.json(), GROUP_PREFIX)
         if root is None:
             logger.warning("Group prefix not found: %s", GROUP_PREFIX)
             return []
@@ -106,7 +151,9 @@ async def get_all_groups() -> list[str]:
         for child in await _children(root["id"]):
             await _walk(child)
 
-    stripped = sorted(p[len(GROUP_PREFIX):] for p in paths)
+    # Drop bare subgroup-only main groups (e.g. "/group", "/village"): they are
+    # not selectable channels, only their subgroups are.
+    stripped = sorted(set(p[len(GROUP_PREFIX):] for p in paths) - SUBGROUP_ONLY_MAIN_GROUPS)
     logger.debug("Fetched %d groups under %s", len(stripped), GROUP_PREFIX)
     return stripped
 
@@ -128,16 +175,7 @@ async def get_group_members(group_path: str) -> list[str]:
             r = await client.get(f"{base}/groups", headers=headers, params={"search": name, "exact": "true"})
             r.raise_for_status()
 
-            def _find(groups: list, path: str) -> dict | None:
-                for g in groups:
-                    if g["path"] == path:
-                        return g
-                    found = _find(g.get("subGroups", []), path)
-                    if found:
-                        return found
-                return None
-
-            group = _find(r.json(), kc_path)
+            group = _find_group(r.json(), kc_path)
             if group is None:
                 logger.warning("Group not found: %s", kc_path)
                 return []
@@ -166,9 +204,15 @@ async def get_group_members(group_path: str) -> list[str]:
 
 
 async def get_user_groups(username: str) -> list[str]:
-    """Return the user's valid channel paths: only groups that are subgroups of
-    GROUP_PREFIX, with that prefix stripped (e.g. the Keycloak group
-    "/j26-scoutid-sync/j26-leader" is returned as "/j26-leader")."""
+    """Return the user's valid channel paths: groups that are subgroups of
+    GROUP_PREFIX, with that prefix stripped (e.g. "/j26-scoutid-sync/leader" ->
+    "/leader").
+
+    A member of a subgroup is also made a member of its main group, so that a
+    notification to the main group reaches the subgroup's members too — except
+    for SUBGROUP_ONLY_MAIN_GROUPS, whose main group is never a target. E.g.
+    "/leader/rover" yields ["/leader/rover", "/leader"], but "/group/784"
+    yields just ["/group/784"]."""
     token = await get_kc_token()
     headers = {"Authorization": f"Bearer {token}"}
     base = f"{settings.KC_API}/admin/realms/{settings.KC_REALM}"
@@ -189,6 +233,13 @@ async def get_user_groups(username: str) -> list[str]:
         groups = r.json()
 
     prefix = GROUP_PREFIX + "/"
-    paths = [g["path"][len(GROUP_PREFIX):] for g in groups if g["path"].startswith(prefix)]
-    logger.debug("User %s is member of groups: %s", username, paths)
-    return paths
+    paths = {g["path"][len(GROUP_PREFIX):] for g in groups if g["path"].startswith(prefix)}
+    # Add the main group for each subgroup membership so main-group
+    # notifications reach subgroup members too (skip subgroup-only main groups).
+    for path in list(paths):
+        main = _main_group(path)
+        if main != path and main not in SUBGROUP_ONLY_MAIN_GROUPS:
+            paths.add(main)
+    result = sorted(paths)
+    logger.debug("User %s is member of groups: %s", username, result)
+    return result

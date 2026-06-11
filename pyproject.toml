@@ -19,6 +19,7 @@ dev = ["pytest>=8,<10", "authlib"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 120
