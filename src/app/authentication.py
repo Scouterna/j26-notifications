@@ -1,5 +1,6 @@
 import logging
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 from fastapi import HTTPException, Request, status
@@ -7,13 +8,10 @@ from joserfc import jwt
 from joserfc.jwk import KeySet
 from pydantic import BaseModel, Field
 
-from .config import get_settings
-
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
-_JWKS_URL = f"{settings.KC_API}/realms/{settings.KC_REALM}/protocol/openid-connect/certs"
-_jwks_keyset: KeySet | None = None
+# Cache the verification key set per origin (base_url) it was discovered from.
+_jwks_keyset_cache: dict[str, KeySet] = {}
 
 
 class AuthUser(BaseModel):
@@ -29,32 +27,49 @@ class AuthUser(BaseModel):
         return f"{self.name or uid} ({uid})"
 
 
-
-
-async def _get_jwks_keyset() -> KeySet | None:
-    global _jwks_keyset
-    if _jwks_keyset is not None:
-        return _jwks_keyset
-
+async def _fetch_json(url: str) -> dict[str, Any] | None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as http_client:
-            response = await http_client.get(_JWKS_URL)
+            response = await http_client.get(url)
             response.raise_for_status()
-            jwks_dict = response.json()
+            return response.json()
     except Exception as exc:
-        logger.warning("Failed to fetch %s: %s", _JWKS_URL, exc)
+        logger.warning("Failed to fetch %s: %s", url, exc)
+        return None
+
+
+async def _get_jwks_keyset(request: Request) -> KeySet | None:
+    """
+    Discover the JWKS via the OIDC metadata served by the '/auth' app in front of
+    us (the framework's auth-app in prod, the local auth router in dev), so we never
+    hardcode the IdP realm/certs URL. Cached per origin.
+    """
+    base_url = str(request.base_url)
+    if base_url in _jwks_keyset_cache:
+        return _jwks_keyset_cache[base_url]
+
+    metadata = await _fetch_json(urljoin(base_url, "auth/.well-known/openid-configuration"))
+    jwks_uri = metadata.get("jwks_uri") if metadata else None
+    if not jwks_uri:
+        logger.warning("OIDC metadata missing jwks_uri")
+        return None
+
+    jwks_dict = await _fetch_json(jwks_uri)
+    if not jwks_dict:
         return None
 
     try:
-        _jwks_keyset = KeySet.import_key_set(jwks_dict)
-        return _jwks_keyset
+        keyset = KeySet.import_key_set(jwks_dict)
     except Exception as exc:
         logger.warning("Failed to parse JWKS: %s", exc)
         return None
 
+    _jwks_keyset_cache[base_url] = keyset
+    return keyset
 
-async def _decode_access_token(token: str) -> dict[str, Any]:
-    keyset = await _get_jwks_keyset()
+
+async def _decode_access_token(token: str, request: Request) -> dict[str, Any]:
+    keyset = await _get_jwks_keyset(request)
     if keyset is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Token validation unavailable")
 
@@ -83,7 +98,7 @@ def _extract_roles(claims: dict[str, Any]) -> list[str]:
 
 
 async def _build_auth_user(token: str, request: Request) -> AuthUser:
-    claims = await _decode_access_token(token)
+    claims = await _decode_access_token(token, request)
     return AuthUser(
         subject=claims.get("sub", ""),
         name=claims.get("name"),
