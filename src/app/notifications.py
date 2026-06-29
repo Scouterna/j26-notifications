@@ -4,7 +4,7 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from .authentication import AuthUser, optional_auth_user, require_auth_user
@@ -196,33 +196,47 @@ async def _insert_notification(
     return row["id"]
 
 
-async def _collect_tokens(channels: list[str]) -> set[str]:
+async def _collect_tokens(channels: list[str]) -> dict[str, set[str]]:
     t0 = time.perf_counter()
-    tokens: set[str] = set()
+    tokens_by_lang: dict[str, set[str]] = {}
     for channel in channels:
         if channel.startswith("/"):
             await _sync_channel_members(channel)
-        rows = await db_fetch("SELECT tokens FROM users WHERE $1 = ANY(channels)", channel)
+        rows = await db_fetch("SELECT tokens, language FROM users WHERE $1 = ANY(channels)", channel)
         for r in rows:
-            tokens.update(r["tokens"])
+            tokens_by_lang.setdefault(r["language"], set()).update(r["tokens"])
+    total = sum(len(t) for t in tokens_by_lang.values())
     logger.info(
         "Token collection for %s: %.0fms, %d tokens",
         channels,
         (time.perf_counter() - t0) * 1000,
-        len(tokens),
+        total,
     )
-    return tokens
+    return tokens_by_lang
 
 
-async def _collect_all_tokens() -> set[str]:
-    rows = await db_fetch("SELECT tokens FROM users")
-    return {token for r in rows for token in r["tokens"]}
+async def _collect_all_tokens() -> dict[str, set[str]]:
+    rows = await db_fetch("SELECT tokens, language FROM users")
+    tokens_by_lang: dict[str, set[str]] = {}
+    for r in rows:
+        tokens_by_lang.setdefault(r["language"], set()).update(r["tokens"])
+    return tokens_by_lang
 
 
-async def _do_send_notification(tokens: set[str], message_json: str) -> None:
+def _pick_translation(notification: dict[str, NotificationTranslation], lang: str) -> NotificationTranslation:
+    return notification.get(lang) or notification.get("en") or notification["sv"]
+
+
+async def _do_send_notification(
+    tokens_by_lang: dict[str, set[str]],
+    notification: dict[str, NotificationTranslation],
+    data_json: str,
+) -> None:
     async with _send_lock:
-        if tokens:
-            await firebase_send(list(tokens), message_json)
+        for lang, tokens in tokens_by_lang.items():
+            if tokens:
+                t = _pick_translation(notification, lang)
+                await firebase_send(list(tokens), t.title, t.body, data_json)
 
 
 # --- Endpoints ---
@@ -233,22 +247,26 @@ async def _do_send_notification(tokens: set[str], message_json: str) -> None:
 async def register_users(
     payload: TokenCreate,
     user: AuthUser = Depends(require_auth_user),
+    j26_language: str | None = Cookie(default=None, alias="j26-language"),
 ):
+    language = j26_language if j26_language and len(j26_language) == 2 else "sv"
     channels = await get_user_groups(user.preferred_username)
     channels.append(user.preferred_username)
     await db_execute(
         """
-        INSERT INTO users (user_id, channels, tokens)
-        VALUES ($1, $2, $3)
+        INSERT INTO users (user_id, channels, tokens, language)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (user_id) DO UPDATE
             SET channels = EXCLUDED.channels,
                 tokens   = ARRAY(
                     SELECT DISTINCT unnest(users.tokens || EXCLUDED.tokens)
-                )
+                ),
+                language = EXCLUDED.language
         """,
         user.preferred_username,
         channels,
         payload.tokens,
+        language,
     )
     return {"status": "ok"}
 
@@ -294,22 +312,21 @@ async def send_notification(
     channels = [group_path_name_to_id(c) for c in payload.channels]
 
     now = datetime.now(timezone.utc)
-    message_json = json.dumps(
-        {
-            "notification": {lang: t.model_dump() for lang, t in payload.notification.items()},
-            "category": payload.category,
-            "important": payload.important,
-            "link": payload.link,
-        }
-    )
-
-    msg_id = await _insert_notification(channels, message_json, now, user.preferred_username, payload.important)
+    message = {
+        "notification": {lang: t.model_dump() for lang, t in payload.notification.items()},
+        "category": payload.category,
+        "important": payload.important,
+        "link": payload.link,
+    }
+    msg_id = await _insert_notification(channels, json.dumps(message), now, user.preferred_username, payload.important)
+    message["id"] = msg_id  # Help the client target the specific notification precisely
+    del message["notification"]  # Don't pass the complete notification in the payload anymore
 
     if "@all" in channels:
-        tokens = await _collect_all_tokens()
+        tokens_by_lang = await _collect_all_tokens()
     else:
-        tokens = await _collect_tokens(channels)
+        tokens_by_lang = await _collect_tokens(channels)
 
-    background_tasks.add_task(_do_send_notification, tokens, message_json)
+    background_tasks.add_task(_do_send_notification, tokens_by_lang, payload.notification, json.dumps(message))
 
     return {"id": msg_id, "status": "accepted"}

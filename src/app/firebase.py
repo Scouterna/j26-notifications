@@ -20,11 +20,12 @@ async def firebase_init():
         initialize_app(cred)
 
 
-async def firebase_send(tokens: list[str], data_json: str) -> None:
+async def firebase_send(tokens: list[str], title: str, body: str, data_json: str) -> None:
     if not tokens:
         return
     multicast_message = messaging.MulticastMessage(
         tokens=tokens,
+        notification=messaging.Notification(title=title, body=body),
         data={"payload": data_json},
     )
     response = await run_in_threadpool(messaging.send_each_for_multicast, multicast_message)

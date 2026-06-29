@@ -65,9 +65,11 @@ async def db_init_tables() -> None:
         CREATE TABLE IF NOT EXISTS users (
             user_id  TEXT PRIMARY KEY,
             channels TEXT[] NOT NULL DEFAULT '{}',
-            tokens   TEXT[] NOT NULL DEFAULT '{}'
+            tokens   TEXT[] NOT NULL DEFAULT '{}',
+            language TEXT   NOT NULL DEFAULT 'sv'
         )
     """)
+    await db_execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT NOT NULL DEFAULT 'sv'")
     await db_execute("""
         CREATE TABLE IF NOT EXISTS notifications (
             id        BIGSERIAL    PRIMARY KEY,
