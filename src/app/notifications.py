@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from .authentication import AuthUser, optional_auth_user, require_auth_user
 from .db import db_execute, db_fetch, db_fetchrow
 from .firebase import firebase_send
-from .groups import group_path_name_to_id
+from .groups import group_path_id_to_name, group_path_name_to_id
 from .keycloak import get_all_groups, get_group_members, get_user_groups
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,18 @@ class NotificationRead(BaseModel):
 class NotificationSent(BaseModel):
     id: int
     status: str
+
+
+class ImportantNotificationRead(BaseModel):
+    id: int
+    notification: dict[str, NotificationTranslation]  # keyed by language code, e.g. "en", "sv"
+    important: bool
+    sent_at: str
+    channels: list[str]  # channel names (group paths translated back from IDs), for row context
+
+
+class NotificationPatch(BaseModel):
+    important: bool
 
 
 # --- Helpers ---
@@ -134,6 +146,18 @@ def _row_to_notification(r) -> NotificationRead:
         sent_at=r["timestamp"].isoformat(),
         sender=r["sender"],
         important=r["important"],
+    )
+
+
+def _row_to_important(r) -> ImportantNotificationRead:
+    msg = json.loads(r["message"])
+    translations = msg.get("notification", {})
+    return ImportantNotificationRead(
+        id=r["id"],
+        notification={lang: NotificationTranslation(**t) for lang, t in translations.items()},
+        important=r["important"],
+        sent_at=r["timestamp"].isoformat(),
+        channels=[group_path_id_to_name(c) for c in r["channels"]],
     )
 
 
@@ -330,3 +354,45 @@ async def send_notification(
     background_tasks.add_task(_do_send_notification, tokens_by_lang, payload.notification, json.dumps(message))
 
     return {"id": msg_id, "status": "accepted"}
+
+
+@notifications_router.get(
+    "/notifications/important",
+    response_model=list[ImportantNotificationRead],
+    status_code=status.HTTP_200_OK,
+)
+async def list_important_notifications(user: AuthUser = Depends(require_auth_user)):
+    """List notifications still flagged important, newest first. Sender-only."""
+    if not is_sender(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sender privileges required.")
+    rows = await db_fetch(
+        "SELECT id, channels, message, timestamp, sender, important FROM notifications"
+        " WHERE important ORDER BY timestamp DESC"
+    )
+    return [_row_to_important(r) for r in rows]
+
+
+@notifications_router.patch(
+    "/notifications/{notification_id}",
+    status_code=status.HTTP_200_OK,
+)
+async def patch_notification(
+    notification_id: int,
+    payload: NotificationPatch,
+    user: AuthUser = Depends(require_auth_user),
+):
+    """Set the `important` flag on a stored notification. State change only —
+    does NOT re-send or re-dispatch. Sender-only."""
+    if not is_sender(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sender privileges required.")
+
+    row = await db_fetchrow(
+        "UPDATE notifications SET important = $1,"
+        " message = jsonb_set(message::jsonb, '{important}', to_jsonb($1::boolean))::text"
+        " WHERE id = $2 RETURNING id",
+        payload.important,
+        notification_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found.")
+    return {"id": notification_id, "important": payload.important}
