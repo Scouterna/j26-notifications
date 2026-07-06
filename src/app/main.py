@@ -9,6 +9,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator, metrics
 
+from .active_users import shutdown as active_users_shutdown
 from .config import get_settings
 from .db import J26NotificationError, close_db_connection, connect_to_db, db_init_tables
 from .firebase import firebase_init
@@ -49,6 +50,7 @@ async def lifespan(app: FastAPI):
             pass
 
     finally:
+        await active_users_shutdown()
         await close_db_connection()
 
 

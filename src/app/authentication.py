@@ -8,6 +8,8 @@ from joserfc import jwt
 from joserfc.jwk import KeySet
 from pydantic import BaseModel, Field
 
+from .active_users import track_user
+
 logger = logging.getLogger(__name__)
 
 # Cache the verification key set per origin (base_url) it was discovered from.
@@ -99,13 +101,15 @@ def _extract_roles(claims: dict[str, Any]) -> list[str]:
 
 async def _build_auth_user(token: str, request: Request) -> AuthUser:
     claims = await _decode_access_token(token, request)
-    return AuthUser(
+    user = AuthUser(
         subject=claims.get("sub", ""),
         name=claims.get("name"),
         preferred_username=claims.get("preferred_username"),
         email=claims.get("email"),
         roles=_extract_roles(claims),
     )
+    await track_user(user.preferred_username or user.subject)
+    return user
 
 
 def _extract_token(request: Request) -> str | None:
