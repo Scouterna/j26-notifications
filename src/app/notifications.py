@@ -4,7 +4,7 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from .authentication import AuthUser, optional_auth_user, require_auth_user
@@ -255,12 +255,14 @@ async def _do_send_notification(
     tokens_by_lang: dict[str, set[str]],
     notification: dict[str, NotificationTranslation],
     data_json: str,
+    link: str | None,
+    base_url: str,
 ) -> None:
     async with _send_lock:
         for lang, tokens in tokens_by_lang.items():
             if tokens:
                 t = _pick_translation(notification, lang)
-                await firebase_send(list(tokens), t.title, t.body, data_json)
+                await firebase_send(list(tokens), t.title, t.body, data_json, link, base_url)
 
 
 # --- Endpoints ---
@@ -321,6 +323,7 @@ async def list_groups():
 async def send_notification(
     payload: NotificationCreate,
     background_tasks: BackgroundTasks,
+    request: Request,
     user: AuthUser = Depends(require_auth_user),
 ):
     if not is_sender(user):
@@ -351,7 +354,14 @@ async def send_notification(
     else:
         tokens_by_lang = await _collect_tokens(channels)
 
-    background_tasks.add_task(_do_send_notification, tokens_by_lang, payload.notification, json.dumps(message))
+    background_tasks.add_task(
+        _do_send_notification,
+        tokens_by_lang,
+        payload.notification,
+        json.dumps(message),
+        payload.link,
+        str(request.base_url),
+    )
 
     return {"id": msg_id, "status": "accepted"}
 
