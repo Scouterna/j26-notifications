@@ -28,25 +28,37 @@ async def firebase_init():
 
 
 async def firebase_send(
-    tokens: list[str], title: str, body: str, data_json: str, link: str | None = None
+    tokens: list[str],
+    title: str,
+    body: str,
+    data_json: str,
+    link: str | None = None,
+    base_url: str | None = None,
 ) -> None:
     if not tokens:
         return
-    multicast_message = messaging.MulticastMessage(
-        tokens=tokens,
-        notification=messaging.Notification(title=title, body=body),
-        data={"payload": data_json},
-        webpush=messaging.WebpushConfig(
+    # base_url comes from the triggering request; the API is served on the same origin
+    # as the app shell, so it points at where the icon/badge assets live. firebase-admin
+    # rejects a non-HTTPS fcm_options.link outright (and web push doesn't work over plain
+    # HTTP anyway), so skip the whole webpush block in that case (local dev).
+    webpush = None
+    if base_url and base_url.startswith("https://"):
+        webpush = messaging.WebpushConfig(
             notification=messaging.WebpushNotification(
-                icon=urljoin(settings.APP_BASE_URL, NOTIFICATION_ICON_PATH),
-                badge=urljoin(settings.APP_BASE_URL, NOTIFICATION_BADGE_PATH),
+                icon=urljoin(base_url, NOTIFICATION_ICON_PATH),
+                badge=urljoin(base_url, NOTIFICATION_BADGE_PATH),
             ),
             # Fall back to the homepage rather than omitting fcm_options entirely: FCM's own
             # click handler (which now displays and handles clicks for background notifications
             # on our behalf) does nothing at all on click if there's no link, not even opening
             # the app.
-            fcm_options=messaging.WebpushFCMOptions(link=urljoin(settings.APP_BASE_URL, link or "/")),
-        ),
+            fcm_options=messaging.WebpushFCMOptions(link=urljoin(base_url, link or "/")),
+        )
+    multicast_message = messaging.MulticastMessage(
+        tokens=tokens,
+        notification=messaging.Notification(title=title, body=body),
+        data={"payload": data_json},
+        webpush=webpush,
     )
     response = await run_in_threadpool(messaging.send_each_for_multicast, multicast_message)
 

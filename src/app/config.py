@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     KC_SA_ACCOUNT_KEY: str
     API_PREFIX: str = "/api"
     ROOT_PATH: str = ""
-    APP_BASE_URL: str
     OAUTH_CLIENT_ID: str = ""
     OAUTH_CLIENT_SECRET: str = ""
     OAUTH_METATADATA_URL: str = ""

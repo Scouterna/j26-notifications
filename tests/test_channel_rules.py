@@ -10,7 +10,6 @@ os.environ.setdefault("POSTGRES_DSN", "postgresql://x")
 os.environ.setdefault("FCM_PROJECT_ID", "x")
 os.environ.setdefault("FCM_CREDENTIALS_JSON", "{}")
 os.environ.setdefault("KC_SA_ACCOUNT_KEY", "x")
-os.environ.setdefault("APP_BASE_URL", "https://example.test")
 
 import pytest
 
