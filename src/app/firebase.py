@@ -41,9 +41,11 @@ async def firebase_send(
                 icon=urljoin(settings.APP_BASE_URL, NOTIFICATION_ICON_PATH),
                 badge=urljoin(settings.APP_BASE_URL, NOTIFICATION_BADGE_PATH),
             ),
-            fcm_options=messaging.WebpushFCMOptions(link=urljoin(settings.APP_BASE_URL, link))
-            if link
-            else None,
+            # Fall back to the homepage rather than omitting fcm_options entirely: FCM's own
+            # click handler (which now displays and handles clicks for background notifications
+            # on our behalf) does nothing at all on click if there's no link, not even opening
+            # the app.
+            fcm_options=messaging.WebpushFCMOptions(link=urljoin(settings.APP_BASE_URL, link or "/")),
         ),
     )
     response = await run_in_threadpool(messaging.send_each_for_multicast, multicast_message)
