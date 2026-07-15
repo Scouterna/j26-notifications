@@ -255,12 +255,13 @@ async def _do_send_notification(
     tokens_by_lang: dict[str, set[str]],
     notification: dict[str, NotificationTranslation],
     data_json: str,
+    link: str | None,
 ) -> None:
     async with _send_lock:
         for lang, tokens in tokens_by_lang.items():
             if tokens:
                 t = _pick_translation(notification, lang)
-                await firebase_send(list(tokens), t.title, t.body, data_json)
+                await firebase_send(list(tokens), t.title, t.body, data_json, link)
 
 
 # --- Endpoints ---
@@ -351,7 +352,9 @@ async def send_notification(
     else:
         tokens_by_lang = await _collect_tokens(channels)
 
-    background_tasks.add_task(_do_send_notification, tokens_by_lang, payload.notification, json.dumps(message))
+    background_tasks.add_task(
+        _do_send_notification, tokens_by_lang, payload.notification, json.dumps(message), payload.link
+    )
 
     return {"id": msg_id, "status": "accepted"}
 
