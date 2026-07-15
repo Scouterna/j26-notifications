@@ -18,6 +18,15 @@ NOTIFICATION_ICON_PATH = "/web-app-manifest-192x192.png"
 NOTIFICATION_BADGE_PATH = "/notification-badge.png"
 
 
+def _same_origin_link(base_url: str, link: str | None) -> str:
+    # Clamp the click target to the app's own origin, mirroring j26-app's resolveLink:
+    # relative paths and same-origin URLs pass through, anything else (external URLs,
+    # scheme-relative //host, ...) falls back to the homepage. The startswith check is
+    # only safe because base_url ends with "/" (request.base_url always does).
+    target = urljoin(base_url, link or "/")
+    return target if target.startswith(base_url) else base_url
+
+
 async def firebase_init():
     cred_data = json.loads(settings.FCM_CREDENTIALS_JSON)
     cred = credentials.Certificate(cred_data)
@@ -52,7 +61,7 @@ async def firebase_send(
             # click handler (which now displays and handles clicks for background notifications
             # on our behalf) does nothing at all on click if there's no link, not even opening
             # the app.
-            fcm_options=messaging.WebpushFCMOptions(link=urljoin(base_url, link or "/")),
+            fcm_options=messaging.WebpushFCMOptions(link=_same_origin_link(base_url, link)),
         )
     multicast_message = messaging.MulticastMessage(
         tokens=tokens,
