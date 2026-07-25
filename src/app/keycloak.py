@@ -26,7 +26,7 @@ GROUP_PREFIX = "/j26-scoutid-sync"
 # channel (excluded from get_all_groups), and membership in one of their
 # subgroups does NOT synthesize the parent main-group channel (unlike e.g.
 # "/leader/rover", which also makes the user a member of "/leader").
-SUBGROUP_ONLY_MAIN_GROUPS = {"/district", "/group", "/village"}
+SUBGROUP_ONLY_MAIN_GROUPS = {"/districts", "/groups", "/villages"}
 
 
 def _main_group(path: str) -> str:
@@ -123,7 +123,7 @@ async def get_all_groups() -> list[str]:
         for child in await _children(root["id"]):
             await _walk(child)
 
-    # Drop bare subgroup-only main groups (e.g. "/group", "/village"): they are
+    # Drop bare subgroup-only main groups (e.g. "/groups", "/villages"): they are
     # not selectable channels, only their subgroups are.
     stripped = set(p[len(GROUP_PREFIX):] for p in paths) - SUBGROUP_ONLY_MAIN_GROUPS
     logger.debug("Fetched %d groups under %s", len(stripped), GROUP_PREFIX)

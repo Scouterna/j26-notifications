@@ -339,7 +339,7 @@ async def send_notification(
             detail="At least one of 'en' or 'sv' translation is required.",
         )
 
-    # Translate "/group/<name>" -> "/group/<id>" so storage and member
+    # Translate "/groups/<name>" -> "/groups/<id>" so storage and member
     # resolution use numeric IDs; other channels pass through unchanged.
     channels = [group_path_name_to_id(c) for c in payload.channels]
 

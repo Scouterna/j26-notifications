@@ -1,15 +1,15 @@
 """Translation between scout-group numeric IDs and human-readable names for
-`/group/<token>` channel paths.
+`/groups/<token>` channel paths.
 
-Channels are path strings such as "/group/784", "/leader/rover", "/village/001"
-or "@all". Only "/group/<numeric-id>" paths refer to scout groups in the
+Channels are path strings such as "/groups/784", "/leader/rover", "/villages/001"
+or "@all". Only "/groups/<numeric-id>" paths refer to scout groups in the
 external membership system; their IDs are meaningless to humans. groups.json
 maps id -> name (e.g. "784" -> "Trollbäckens Scoutkår"). We expose names at the
 API boundary (outgoing /groups, incoming POST /notifications) while the rest of
 the backend keeps using IDs for Keycloak member resolution and DB storage.
 
-Only the "/group/" prefix is translated; every other channel passes through
-unchanged. The token after "/group/" is taken as-is (never split further), so
+Only the "/groups/" prefix is translated; every other channel passes through
+unchanged. The token after "/groups/" is taken as-is (never split further), so
 names containing spaces or slashes round-trip correctly.
 """
 
@@ -20,7 +20,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _GROUPS_FILE = Path(__file__).with_name("groups.json")
-_GROUP_PREFIX = "/group/"
+_GROUP_PREFIX = "/groups/"
 
 
 def _load() -> tuple[dict[str, str], dict[str, str]]:
@@ -46,7 +46,7 @@ _ID_TO_NAME, _NAME_TO_ID = _load()
 
 
 def group_path_id_to_name(path: str) -> str:
-    """'/group/784' -> '/group/Trollbäckens Scoutkår'. Non-'/group/' paths and
+    """'/groups/784' -> '/groups/Trollbäckens Scoutkår'. Non-'/groups/' paths and
     unknown IDs are returned unchanged (unknown IDs are logged)."""
     if not path.startswith(_GROUP_PREFIX):
         return path
@@ -59,7 +59,7 @@ def group_path_id_to_name(path: str) -> str:
 
 
 def group_path_name_to_id(path: str) -> str:
-    """'/group/Trollbäckens Scoutkår' -> '/group/784'. Non-'/group/' paths and
+    """'/groups/Trollbäckens Scoutkår' -> '/groups/784'. Non-'/groups/' paths and
     unknown names are returned unchanged (unknown names are logged)."""
     if not path.startswith(_GROUP_PREFIX):
         return path

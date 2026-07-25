@@ -21,8 +21,8 @@ from app.keycloak import SUBGROUP_ONLY_MAIN_GROUPS, _main_group
         ("/leader", "/leader"),
         ("/leader/rover", "/leader"),
         ("/staff/funktion-infra", "/staff"),
-        ("/group/784", "/group"),
-        ("/village/001", "/village"),
+        ("/groups/784", "/groups"),
+        ("/villages/001", "/villages"),
     ],
 )
 def test_main_group(path, expected):
@@ -56,14 +56,14 @@ def test_direct_main_group_is_noop():
 
 
 def test_subgroup_only_main_not_synthesized():
-    assert _synthesize({"/group/784"}) == ["/group/784"]
-    assert _synthesize({"/village/001"}) == ["/village/001"]
-    assert _synthesize({"/district/amazonas"}) == ["/district/amazonas"]
+    assert _synthesize({"/groups/784"}) == ["/groups/784"]
+    assert _synthesize({"/villages/001"}) == ["/villages/001"]
+    assert _synthesize({"/districts/amazonas"}) == ["/districts/amazonas"]
 
 
 def test_mixed_membership():
-    assert _synthesize({"/leader/rover", "/group/784", "/staff"}) == [
-        "/group/784",
+    assert _synthesize({"/leader/rover", "/groups/784", "/staff"}) == [
+        "/groups/784",
         "/leader",
         "/leader/rover",
         "/staff",
