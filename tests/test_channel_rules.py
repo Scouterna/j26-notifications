@@ -1,6 +1,5 @@
 """Unit tests for main-group / subgroup channel rules in keycloak.py:
-- bare subgroup-only main groups are excluded from get_all_groups()
-- subgroup membership synthesizes the main-group channel (except subgroup-only)
+subgroup membership synthesizes the main-group channel (except subgroup-only)
 """
 
 import os
@@ -13,7 +12,6 @@ os.environ.setdefault("KC_SA_ACCOUNT_KEY", "x")
 
 import pytest
 
-from app import keycloak
 from app.keycloak import SUBGROUP_ONLY_MAIN_GROUPS, _main_group
 
 
@@ -29,46 +27,6 @@ from app.keycloak import SUBGROUP_ONLY_MAIN_GROUPS, _main_group
 )
 def test_main_group(path, expected):
     assert _main_group(path) == expected
-
-
-def test_get_all_groups_excludes_bare_subgroup_only_mains(tmp_path, monkeypatch):
-    f = tmp_path / "temp_groups.txt"
-    f.write_text(
-        "\n".join(
-            [
-                "/leader",
-                "/leader/rover",
-                "/staff",
-                "/group",
-                "/group/784",
-                "/village",
-                "/village/001",
-                "/district",
-                "/district/amazonas",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(keycloak, "_TEMP_GROUPS_FILE", f)
-    # Avoid name translation noise: stub id->name to identity for this test.
-    monkeypatch.setattr(keycloak, "group_path_id_to_name", lambda p: p)
-
-    import asyncio
-
-    result = asyncio.run(keycloak.get_all_groups())
-
-    # Bare subgroup-only main groups are gone; their subgroups and the
-    # member-bearing mains remain.
-    assert "/group" not in result
-    assert "/village" not in result
-    assert "/district" not in result
-    assert "/group/784" in result
-    assert "/village/001" in result
-    assert "/district/amazonas" in result
-    assert "/leader" in result
-    assert "/leader/rover" in result
-    assert "/staff" in result
 
 
 # --- Parent-synthesis transformation (the logic applied inside get_user_groups) ---

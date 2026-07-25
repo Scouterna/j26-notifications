@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 import httpx
 
@@ -70,34 +69,7 @@ async def get_kc_token() -> str:
     return data["access_token"]
 
 
-# TEMPORARY: get_all_groups() reads this file instead of querying Keycloak, so
-# the returned list can be changed with external tools without restarting the
-# app. One group path per line; blank lines and lines starting with '#' are
-# ignored. To restore live behaviour, make get_all_groups() call
-# _get_all_groups_from_keycloak() again and remove this file + constant.
-_TEMP_GROUPS_FILE = Path(__file__).with_name("temp_groups.txt")
-
-
 async def get_all_groups() -> list[str]:
-    """Return all valid channel paths, with the GROUP_PREFIX stripped, sorted.
-
-    TEMPORARY: reads the list fresh from _TEMP_GROUPS_FILE on every call. The
-    live Keycloak implementation is kept in _get_all_groups_from_keycloak()."""
-    try:
-        lines = _TEMP_GROUPS_FILE.read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
-        logger.warning("Could not read temp groups file %s: %s", _TEMP_GROUPS_FILE, exc)
-        return []
-    groups = {line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")}
-    # Drop bare subgroup-only main groups (e.g. "/group", "/village"): they are
-    # not selectable channels, only their subgroups are.
-    groups -= SUBGROUP_ONLY_MAIN_GROUPS
-    # Translate "/group/<id>" -> "/group/<name>" so clients see human-readable
-    # group names; all other channels pass through unchanged.
-    return sorted(group_path_id_to_name(g) for g in groups)
-
-
-async def _get_all_groups_from_keycloak() -> list[str]:
     """Return all valid channel paths: every subgroup under GROUP_PREFIX, with
     that prefix stripped (e.g. '/j26-leader/j26-rover'), sorted.
 
@@ -153,9 +125,11 @@ async def _get_all_groups_from_keycloak() -> list[str]:
 
     # Drop bare subgroup-only main groups (e.g. "/group", "/village"): they are
     # not selectable channels, only their subgroups are.
-    stripped = sorted(set(p[len(GROUP_PREFIX):] for p in paths) - SUBGROUP_ONLY_MAIN_GROUPS)
+    stripped = set(p[len(GROUP_PREFIX):] for p in paths) - SUBGROUP_ONLY_MAIN_GROUPS
     logger.debug("Fetched %d groups under %s", len(stripped), GROUP_PREFIX)
-    return stripped
+    # Translate "/group/<id>" -> "/group/<name>" so clients see human-readable
+    # group names; all other channels pass through unchanged.
+    return sorted(group_path_id_to_name(g) for g in stripped)
 
 
 async def get_group_members(group_path: str) -> list[str]:
