@@ -251,6 +251,11 @@ def _pick_translation(notification: dict[str, NotificationTranslation], lang: st
     return notification.get(lang) or notification.get("en") or notification["sv"]
 
 
+# FCM hard-caps MulticastMessage at this many tokens per call; send_each_for_multicast
+# raises ValueError above it, so batches larger than this (e.g. @all) must be chunked.
+FCM_MAX_TOKENS_PER_CALL = 500
+
+
 async def _do_send_notification(
     tokens_by_lang: dict[str, set[str]],
     notification: dict[str, NotificationTranslation],
@@ -260,9 +265,13 @@ async def _do_send_notification(
 ) -> None:
     async with _send_lock:
         for lang, tokens in tokens_by_lang.items():
-            if tokens:
-                t = _pick_translation(notification, lang)
-                await firebase_send(list(tokens), t.title, t.body, data_json, link, base_url)
+            if not tokens:
+                continue
+            t = _pick_translation(notification, lang)
+            token_list = list(tokens)
+            for i in range(0, len(token_list), FCM_MAX_TOKENS_PER_CALL):
+                batch = token_list[i : i + FCM_MAX_TOKENS_PER_CALL]
+                await firebase_send(batch, t.title, t.body, data_json, link, base_url)
 
 
 # --- Endpoints ---
