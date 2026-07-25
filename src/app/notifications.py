@@ -162,44 +162,40 @@ def _row_to_important(r) -> ImportantNotificationRead:
 
 
 async def _sync_channel_members(channel: str) -> None:
-    """Refresh group membership from Keycloak, only writing to DB for users whose channels changed.
-    If Keycloak is unavailable, logs a warning and skips the sync."""
+    """Reconcile DB membership in `channel` against its live Keycloak member list:
+    add the channel for current members missing it, remove it from users who no
+    longer are members. Only touches `channel` itself — a user's other channels
+    are left as-is (refreshed separately by the periodic full sync in user_sync.py).
+    Existing rows only: users who have never registered a token gain nothing from
+    a DB row here. If Keycloak is unavailable, logs a warning and skips the sync."""
     try:
-        usernames = await get_group_members(channel)
-        if not usernames:
-            return
-
-        # Fetch current DB state for all members in one query
-        rows = await db_fetch(
-            "SELECT user_id, channels FROM users WHERE user_id = ANY($1)",
-            usernames,
-        )
-        db_channels: dict[str, set[str]] = {r["user_id"]: set(r["channels"]) for r in rows}
+        live_members = set(await get_group_members(channel))
 
         t0 = time.perf_counter()
-        updates = 0
-        for username in usernames:
-            kc_channels = await get_user_groups(username)
-            kc_channels.append(username)
-            kc_set = set(kc_channels)
-            if db_channels.get(username) == kc_set:
-                continue  # no change, skip DB write
-            updates += 1
+        rows = await db_fetch("SELECT user_id, channels FROM users WHERE $1 = ANY(channels)", channel)
+        db_members = {r["user_id"] for r in rows}
+
+        joined = live_members - db_members
+        left = db_members - live_members
+
+        if joined:
             await db_execute(
-                """
-                INSERT INTO users (user_id, channels, tokens)
-                VALUES ($1, $2, '{}')
-                ON CONFLICT (user_id) DO UPDATE
-                    SET channels = EXCLUDED.channels
-                """,
-                username,
-                kc_channels,
+                "UPDATE users SET channels = array_append(channels, $1) WHERE user_id = ANY($2)",
+                channel,
+                list(joined),
+            )
+        if left:
+            await db_execute(
+                "UPDATE users SET channels = array_remove(channels, $1) WHERE user_id = ANY($2)",
+                channel,
+                list(left),
             )
         logger.debug(
-            "Keycloak sync for %s: %d members, %d updated, %.0fms",
+            "Channel sync for %s: %d live members, %d joined, %d left, %.0fms",
             channel,
-            len(usernames),
-            updates,
+            len(live_members),
+            len(joined),
+            len(left),
             (time.perf_counter() - t0) * 1000,
         )
     except Exception as exc:

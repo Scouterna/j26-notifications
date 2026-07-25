@@ -14,6 +14,8 @@ from .config import get_settings
 from .db import J26NotificationError, close_db_connection, connect_to_db, db_init_tables
 from .firebase import firebase_init
 from .notifications import notifications_router
+from .user_sync import shutdown as user_sync_shutdown
+from .user_sync import start as user_sync_start
 
 # --- Create instrumentor, settings and logger objects ---
 instrumentator = Instrumentator(
@@ -38,6 +40,7 @@ async def lifespan(app: FastAPI):
     await connect_to_db()
     await db_init_tables()
     await firebase_init()
+    user_sync_start()
     logger.info("j26-notifications started and is accepting connections!")
 
     try:
@@ -50,6 +53,7 @@ async def lifespan(app: FastAPI):
             pass
 
     finally:
+        await user_sync_shutdown()
         await active_users_shutdown()
         await close_db_connection()
 

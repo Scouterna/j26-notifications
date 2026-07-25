@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     OAUTH_CLIENT_SECRET: str = ""
     OAUTH_METATADATA_URL: str = ""
     ACTIVE_USER_TIMEOUT_SECONDS: int = 600
+    USER_SYNC_INTERVAL_MINUTES: int = 120
 
     model_config = SettingsConfigDict(env_file=".env")
 
