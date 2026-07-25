@@ -4,10 +4,11 @@ Message sends only reconcile the one channel being sent to (see
 _sync_channel_members in notifications.py) — that keeps delivery to the target
 channel accurate without a per-member Keycloak round-trip, but leaves a user's
 *other* channel memberships stale until something else refreshes them. This
-background loop is that something else: every USER_SYNC_INTERVAL_MINUTES it
-walks every row in `users` and refreshes their full channel list from Keycloak,
-so a user who joined a channel that nobody has messaged since still eventually
-shows up as a member (and sees history for it via GET /notifications).
+background loop is that something else: once at startup, then every
+USER_SYNC_INTERVAL_MINUTES, it walks every row in `users` and refreshes their
+full channel list from Keycloak, so a user who joined a channel that nobody
+has messaged since still eventually shows up as a member (and sees history for
+it via GET /notifications).
 
 Users can also force an immediate refresh of their own row by hitting
 /register again (the j26-app prompts this if someone reports a missing
@@ -56,12 +57,15 @@ async def _run_periodically() -> None:
     interval = get_settings().USER_SYNC_INTERVAL_MINUTES * 60
     while True:
         try:
-            await asyncio.sleep(interval)
             await _sync_all_users()
         except asyncio.CancelledError:
             return
         except Exception:
             logger.exception("Full user sync failed, will retry next interval")
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            return
 
 
 def start() -> None:
