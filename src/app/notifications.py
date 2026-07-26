@@ -12,6 +12,7 @@ from .db import db_execute, db_fetch, db_fetchrow
 from .firebase import firebase_send
 from .groups import group_path_id_to_name, group_path_name_to_id
 from .keycloak import get_all_groups, get_group_members, get_user_groups
+from .registered_users import record_new_registration
 
 logger = logging.getLogger(__name__)
 _send_lock = asyncio.Lock()
@@ -283,7 +284,7 @@ async def register_users(
     language = j26_language if j26_language and len(j26_language) == 2 else "sv"
     channels = await get_user_groups(user.preferred_username)
     channels.append(user.preferred_username)
-    await db_execute(
+    row = await db_fetchrow(
         """
         INSERT INTO users (user_id, channels, tokens, language)
         VALUES ($1, $2, $3, $4)
@@ -293,12 +294,15 @@ async def register_users(
                     SELECT DISTINCT unnest(users.tokens || EXCLUDED.tokens)
                 ),
                 language = EXCLUDED.language
+        RETURNING (xmax = 0) AS inserted
         """,
         user.preferred_username,
         channels,
         payload.tokens,
         language,
     )
+    if row["inserted"]:
+        record_new_registration()
     return {"status": "ok"}
 
 

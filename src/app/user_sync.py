@@ -13,6 +13,10 @@ it via GET /notifications).
 Users can also force an immediate refresh of their own row by hitting
 /register again (the j26-app prompts this if someone reports a missing
 notification).
+
+Also refreshes the registered_users gauge (see registered_users.py) from the
+row count fetched here, as a backstop in case a pod restart lost the
+in-process count kept by /register.
 """
 
 import asyncio
@@ -22,6 +26,7 @@ import time
 from .config import get_settings
 from .db import db_execute, db_fetch
 from .keycloak import get_user_groups
+from .registered_users import set_registered_count
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +36,7 @@ _task: asyncio.Task | None = None
 async def _sync_all_users() -> None:
     t0 = time.perf_counter()
     rows = await db_fetch("SELECT user_id, channels FROM users")
+    set_registered_count(len(rows))
     updates = 0
     for row in rows:
         username = row["user_id"]
