@@ -23,6 +23,8 @@ import asyncio
 import logging
 import time
 
+import httpx
+
 from .config import get_settings
 from .db import db_execute, db_fetch
 from .keycloak import get_user_groups
@@ -38,19 +40,20 @@ async def _sync_all_users() -> None:
     rows = await db_fetch("SELECT user_id, channels FROM users")
     set_registered_count(len(rows))
     updates = 0
-    for row in rows:
-        username = row["user_id"]
-        try:
-            kc_channels = await get_user_groups(username)
-        except Exception as exc:
-            logger.warning("Keycloak sync failed for user %s, skipping: %s", username, exc)
-            continue
-        kc_channels.append(username)
-        kc_set = set(kc_channels)
-        if set(row["channels"]) == kc_set:
-            continue  # no change, skip DB write
-        updates += 1
-        await db_execute("UPDATE users SET channels = $1 WHERE user_id = $2", kc_channels, username)
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for row in rows:
+            username = row["user_id"]
+            try:
+                kc_channels = await get_user_groups(username, client=client)
+            except Exception as exc:
+                logger.warning("Keycloak sync failed for user %s, skipping: %s", username, exc)
+                continue
+            kc_channels.append(username)
+            kc_set = set(kc_channels)
+            if set(row["channels"]) == kc_set:
+                continue  # no change, skip DB write
+            updates += 1
+            await db_execute("UPDATE users SET channels = $1 WHERE user_id = $2", kc_channels, username)
     logger.info(
         "Full user sync: %d users, %d updated, %.0fms",
         len(rows),

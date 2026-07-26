@@ -177,7 +177,7 @@ async def get_group_members(group_path: str) -> list[str]:
     return usernames
 
 
-async def get_user_groups(username: str) -> list[str]:
+async def get_user_groups(username: str, client: httpx.AsyncClient | None = None) -> list[str]:
     """Return the user's valid channel paths: groups that are subgroups of
     GROUP_PREFIX, with that prefix stripped (e.g. "/j26-scoutid-sync/leader" ->
     "/leader").
@@ -186,14 +186,18 @@ async def get_user_groups(username: str) -> list[str]:
     notification to the main group reaches the subgroup's members too — except
     for SUBGROUP_ONLY_MAIN_GROUPS, whose main group is never a target. E.g.
     "/leader/rover" yields ["/leader/rover", "/leader"], but "/group/784"
-    yields just ["/group/784"]."""
+    yields just ["/group/784"].
+
+    Pass `client` to reuse an existing httpx.AsyncClient (e.g. user_sync.py's
+    full sync, which calls this once per user) instead of opening a new
+    connection per call."""
     token = await get_kc_token()
     headers = {"Authorization": f"Bearer {token}"}
     base = f"{settings.KC_API}/admin/realms/{settings.KC_REALM}"
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async def _fetch(http: httpx.AsyncClient) -> list[dict]:
         # Resolve username to Keycloak user ID
-        r = await client.get(f"{base}/users", headers=headers, params={"username": username, "exact": "true"})
+        r = await http.get(f"{base}/users", headers=headers, params={"username": username, "exact": "true"})
         r.raise_for_status()
         users = r.json()
         if not users:
@@ -202,9 +206,15 @@ async def get_user_groups(username: str) -> list[str]:
 
         user_id = users[0]["id"]
 
-        r = await client.get(f"{base}/users/{user_id}/groups", headers=headers)
+        r = await http.get(f"{base}/users/{user_id}/groups", headers=headers)
         r.raise_for_status()
-        groups = r.json()
+        return r.json()
+
+    if client is not None:
+        groups = await _fetch(client)
+    else:
+        async with httpx.AsyncClient(timeout=10.0) as new_client:
+            groups = await _fetch(new_client)
 
     prefix = GROUP_PREFIX + "/"
     paths = {g["path"][len(GROUP_PREFIX):] for g in groups if g["path"].startswith(prefix)}
